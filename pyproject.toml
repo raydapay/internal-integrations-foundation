@@ -1,0 +1,43 @@
+[project]
+name = "pf-jira-sync"
+version = "0.1.0"
+description = "Middleware for PeopleForce to Jira Synchronization"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi[all]",
+    "uvicorn[standard]",
+    "sqlmodel",
+    "pydantic-settings",
+    "httpx",
+    "arq",
+    "redis",
+    "loguru",
+    "authlib",
+    "itsdangerous",
+    "jinja2",
+    "python-multipart",
+    "aiosqlite>=0.22.1",
+]
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "pytest",
+    "pytest-asyncio",
+    "types-redis",
+    "types-requests",
+    "pre-commit>=4.5.1",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+select = ["E", "F", "I", "B", "UP", "PL", "RUF"]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

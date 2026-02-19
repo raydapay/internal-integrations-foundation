@@ -1,0 +1,22 @@
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # Ruff version matches your pyproject.toml target
+    rev: v0.3.0
+    hooks:
+      # 1. Force Formatting (Replaces Black)
+      - id: ruff-format
+      # 2. Linting & Auto-fix (Replaces Flake8/Isort)
+      - id: ruff
+        args: [ --fix, --exit-non-zero-on-fix ]
+
+  - repo: local
+    hooks:
+      # 3. Test Suite Execution
+      - id: python-unittest
+        name: python-unittest
+        entry: uv run python -m unittest discover tests
+        language: system
+        pass_filenames: false
+        always_run: true

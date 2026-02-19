@@ -1,0 +1,43 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: pf_sync_app
+    env_file: ./secrets/.env
+    volumes:
+      - ./src:/app/src
+      - ./data:/app/data
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+      - seq
+    # Note: When running inside Docker, this uses the internal hostnames defined below.
+    command: uvicorn src.app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  redis:
+    image: redis:alpine
+    container_name: pf_sync_redis
+    ports:
+      - "6379:6379" # <--- ADDED: Expose to Host for local dev
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  seq:
+    image: datalust/seq:latest
+    container_name: pf_sync_seq
+    environment:
+      - ACCEPT_EULA=Y
+      - SEQ_FIRSTRUN_ADMINPASSWORD=InternalDev123! # <--- REQUIRED: Initial admin password
+    ports:
+      - "5341:80"   # Exposes UI and API to Host
+      - "5342:5341" # Internal ingestion port if needed, usually 80 mapped to host is enough
+    volumes:
+      - seq_data:/data
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  seq_data:
