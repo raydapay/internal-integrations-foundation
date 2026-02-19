@@ -22,9 +22,8 @@ class InterceptHandler(logging.Handler):
             frame = frame.f_back
             depth += 1
 
-        logger.opt(depth=depth, exception=record.exc_info).log(
-            level, record.getMessage()
-        )
+        logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
+
 
 class SeqSink:
     """Synchronous sink for sending logs to Seq via HTTP."""
@@ -51,7 +50,7 @@ class SeqSink:
                     "Module": record["module"],
                     "Line": record["line"],
                     "Process": record["process"].get("name"),
-                }
+                },
             }
 
             if record.get("exception"):
@@ -63,11 +62,12 @@ class SeqSink:
 
             resp = self.client.post(self.server_url, json={"Events": [payload]}, headers=headers)
 
-            if resp.status_code >= 400:
+            if resp.status_code >= 400:  # noqa: PLR2004
                 sys.stderr.write(f"Seq API Error {resp.status_code}: {resp.text}\n")
 
         except Exception as e:
             sys.stderr.write(f"Failed to send log to Seq: {e}\nPayload: {message}\n")
+
 
 def configure_logging() -> None:
     """Configures Loguru to capture system logs and output to Seq and Console."""
@@ -77,7 +77,8 @@ def configure_logging() -> None:
     logger.add(
         sys.stderr,
         level="INFO",
-        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>"
+        "{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
     )
 
     # 2. Seq Sink
@@ -88,8 +89,8 @@ def configure_logging() -> None:
             SeqSink(settings.SEQ_URL, api_key=api_key),
             level="INFO",
             format="{message}",
-            serialize=True,     # Loguru serializes to JSON string
-            enqueue=True,       # Runs in background thread
+            serialize=True,  # Loguru serializes to JSON string
+            enqueue=True,  # Runs in background thread
             backtrace=True,
             diagnose=True,
         )
@@ -102,9 +103,9 @@ def configure_logging() -> None:
     # to ensure InterceptHandler never sees these logs.
     for _lib in ["httpx", "httpcore"]:
         _log = logging.getLogger(_lib)
-        _log.setLevel(logging.WARNING) # Only allow warnings/errors
-        _log.propagate = False         # Stop log bubbling to root
-        _log.handlers = []             # Remove any attached handlers
+        _log.setLevel(logging.WARNING)  # Only allow warnings/errors
+        _log.propagate = False  # Stop log bubbling to root
+        _log.handlers = []  # Remove any attached handlers
 
     for _log in ["uvicorn", "uvicorn.error", "fastapi"]:
         _logger = logging.getLogger(_log)

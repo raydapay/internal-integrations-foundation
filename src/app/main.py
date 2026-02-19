@@ -39,7 +39,7 @@ app = FastAPI(
     debug=settings.DEBUG,
     lifespan=lifespan,
     docs_url="/docs",
-    redoc_url=None
+    redoc_url=None,
 )
 
 # --- Middleware ---
@@ -48,7 +48,7 @@ app.add_middleware(
     SessionMiddleware,
     secret_key=settings.SECRET_KEY,
     max_age=3600 * 24 * 7,  # 7 days
-    https_only=not settings.DEBUG  # Allow HTTP in dev, HTTPS in prod
+    https_only=not settings.DEBUG,  # Allow HTTP in dev, HTTPS in prod
 )
 
 
@@ -78,9 +78,7 @@ async def request_id_middleware(
             response.headers["X-Request-ID"] = request_id
             response.headers["X-Process-Time"] = str(process_time)
 
-            logger.info(
-                f"Completed {response.status_code} in {process_time:.4f}s"
-            )
+            logger.info(f"Completed {response.status_code} in {process_time:.4f}s")
             return response
         except Exception as e:
             process_time = time.perf_counter() - start_time
@@ -106,8 +104,8 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
         content={
             "error": "Internal Server Error",
             "message": "An unexpected error occurred.",
-            "request_id": request.headers.get("X-Request-ID", "unknown")
-        }
+            "request_id": request.headers.get("X-Request-ID", "unknown"),
+        },
     )
 
 
@@ -143,7 +141,7 @@ async def home(request: Request) -> dict[str, str | dict]:
     Returns:
         dict: The current authentication status and user details if logged in.
     """
-    user = request.session.get('user')
+    user = request.session.get("user")
     if user:
         return {"status": "Authenticated", "user": user, "action": "Go to /auth/logout"}
     return {"status": "Anonymous", "action": "Go to /auth/login"}

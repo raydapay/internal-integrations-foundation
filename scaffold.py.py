@@ -3,8 +3,9 @@ import os
 import pathlib
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(message)s')
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
+
 
 def create_structure(base_path: str = ".") -> None:
     """Scaffolds the project directory structure and core configuration files."""
@@ -247,9 +248,13 @@ dist/
     write_file(os.path.join(base_path, ".gitignore"), gitignore_content)
 
     # 7. Placeholder for secrets/.env
-    write_file(os.path.join(base_path, "secrets/.env"), "# PF_API_KEY=...\n# JIRA_AUTH=...\nSECRET_KEY=changeme")
+    write_file(
+        os.path.join(base_path, "secrets/.env"),
+        "# PF_API_KEY=...\n# JIRA_AUTH=...\nSECRET_KEY=changeme",
+    )
 
     logger.info("Project scaffolding complete.")
+
 
 def write_file(path: str, content: str) -> None:
     try:
@@ -258,6 +263,7 @@ def write_file(path: str, content: str) -> None:
         logger.info(f"Created: {path}")
     except Exception as e:
         logger.error(f"Failed to create {path}: {e}")
+
 
 if __name__ == "__main__":
     create_structure()

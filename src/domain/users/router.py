@@ -13,6 +13,7 @@ from src.domain.users.models import User
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
+
 def _get_https_redirect_uri(request: Request, route_name: str) -> str:
     """Constructs a secure redirect URI, accounting for reverse proxies.
 
@@ -28,6 +29,7 @@ def _get_https_redirect_uri(request: Request, route_name: str) -> str:
         redirect_uri = redirect_uri.replace("http://", "https://", 1)
     return redirect_uri
 
+
 @router.get("/login")
 async def login(request: Request) -> RedirectResponse:
     """Initiates the Google OAuth2 flow.
@@ -39,13 +41,13 @@ async def login(request: Request) -> RedirectResponse:
         RedirectResponse: Redirection to the Google authorization endpoint.
     """
     oauth = get_oauth()
-    redirect_uri = _get_https_redirect_uri(request, 'auth_google')
+    redirect_uri = _get_https_redirect_uri(request, "auth_google")
     return await oauth.google.authorize_redirect(request, redirect_uri)
+
 
 @router.get("/google", name="auth_google")
 async def auth_google(
-    request: Request,
-    session: Annotated[AsyncSession, Depends(get_session)]
+    request: Request, session: Annotated[AsyncSession, Depends(get_session)]
 ) -> RedirectResponse:
     """Callback for Google OAuth2. Handles JIT user provisioning.
 
@@ -64,14 +66,14 @@ async def auth_google(
         token = await oauth.google.authorize_access_token(request)
     except Exception as e:
         logger.error(f"OAuth token exchange failed: {e}")
-        raise HTTPException(status_code=400, detail="Authentication failed")
+        raise HTTPException(status_code=400, detail="Authentication failed")  # noqa: B904
 
-    user_info = token.get('userinfo')
+    user_info = token.get("userinfo")
     if not user_info:
         logger.error("No userinfo in token")
         raise HTTPException(status_code=400, detail="No user info received")
 
-    email = user_info.get('email')
+    email = user_info.get("email")
 
     statement = select(User).where(User.email == email)
     result = await session.exec(statement)
@@ -81,28 +83,29 @@ async def auth_google(
         logger.info(f"Provisioning new user: {email}")
         user = User(
             email=email,
-            full_name=user_info.get('name', 'Unknown'),
-            avatar_url=user_info.get('picture'),
+            full_name=user_info.get("name", "Unknown"),
+            avatar_url=user_info.get("picture"),
         )
         session.add(user)
     else:
         user.last_login = datetime.utcnow()
-        user.avatar_url = user_info.get('picture')
-        user.full_name = user_info.get('name', user.full_name)
+        user.avatar_url = user_info.get("picture")
+        user.full_name = user_info.get("name", user.full_name)
         session.add(user)
 
     await session.commit()
     await session.refresh(user)
 
-    request.session['user'] = {
+    request.session["user"] = {
         "id": user.id,
         "email": user.email,
         "name": user.full_name,
-        "picture": user.avatar_url
+        "picture": user.avatar_url,
     }
 
     logger.info(f"User logged in: {email}")
     return RedirectResponse(url="/")
+
 
 @router.get("/logout")
 async def logout(request: Request) -> RedirectResponse:
@@ -114,5 +117,5 @@ async def logout(request: Request) -> RedirectResponse:
     Returns:
         RedirectResponse: Redirection to the application root.
     """
-    request.session.pop('user', None)
+    request.session.pop("user", None)
     return RedirectResponse(url="/")

@@ -1,4 +1,3 @@
-
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,7 +17,7 @@ class Settings(BaseSettings):
     # Auth
     GOOGLE_CLIENT_ID: str | None = None
     GOOGLE_CLIENT_SECRET: str | None = None
-    SECRET_KEY: str # For session signing
+    SECRET_KEY: str  # For session signing
 
     # Infrastructure
     REDIS_URL: str = "redis://redis:6379/0"
@@ -26,9 +25,8 @@ class Settings(BaseSettings):
     SEQ_API_KEY: str | None = None
 
     model_config = SettingsConfigDict(
-        env_file="secrets/.env",
-        env_file_encoding="utf-8",
-        extra="ignore"
+        env_file="secrets/.env", env_file_encoding="utf-8", extra="ignore"
     )
+
 
 settings = Settings()

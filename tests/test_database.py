@@ -73,5 +73,5 @@ class TestDatabaseCore(unittest.IsolatedAsyncioTestCase):
         mock_cursor.close.assert_called_once()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

@@ -20,14 +20,13 @@ engine: AsyncEngine = create_async_engine(
     connect_args={
         "check_same_thread": False,
         "timeout": 30.0,  # CRITICAL: 30s busy timeout for concurrent multi-process writes
-    }
+    },
 )
 
 
 @event.listens_for(engine.sync_engine, "connect")
 def set_sqlite_pragma(
-    dbapi_connection: DBAPIConnection,
-    connection_record: ConnectionPoolEntry
+    dbapi_connection: DBAPIConnection, connection_record: ConnectionPoolEntry
 ) -> None:
     """Configures SQLite connection pragmas for concurrent access.
 
@@ -54,11 +53,7 @@ def set_sqlite_pragma(
         cursor.close()
 
 
-async_session_maker = sessionmaker(
-    bind=engine,
-    class_=AsyncSession,
-    expire_on_commit=False
-)
+async_session_maker = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
