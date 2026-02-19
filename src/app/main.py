@@ -11,6 +11,7 @@ from loguru import logger
 from sqlmodel import SQLModel
 from starlette.middleware.sessions import SessionMiddleware
 
+from src import version
 from src.config.settings import settings
 from src.core.database import engine
 from src.core.logger import configure_logging
@@ -127,7 +128,12 @@ async def health_check() -> dict[str, str]:
     Returns:
         dict: The application status and name.
     """
-    return {"status": "ok", "service": settings.APP_NAME}
+    return {
+        "status": "ok",
+        "service": settings.APP_NAME,
+        "version": version.VERSION,
+        "build_time": version.BUILD_TIMESTAMP,
+    }
 
 
 # Temporary endpoint to verify auth works (until we have frontend)
