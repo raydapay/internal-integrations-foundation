@@ -24,10 +24,18 @@ engine: AsyncEngine = create_async_engine(
 )
 
 
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    """Dependency for injecting an async database session into FastAPI routes.
+
+    Yields:
+        AsyncSession: The SQLModel asynchronous session.
+    """
+    async with async_session_maker() as session:
+        yield session
+
+
 @event.listens_for(engine.sync_engine, "connect")
-def set_sqlite_pragma(
-    dbapi_connection: DBAPIConnection, connection_record: ConnectionPoolEntry
-) -> None:
+def set_sqlite_pragma(dbapi_connection: DBAPIConnection, connection_record: ConnectionPoolEntry) -> None:
     """Configures SQLite connection pragmas for concurrent access.
 
     Enables Write-Ahead Logging (WAL) and sets synchronous mode to NORMAL.
@@ -54,13 +62,3 @@ def set_sqlite_pragma(
 
 
 async_session_maker = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
-
-
-async def get_session() -> AsyncGenerator[AsyncSession, None]:
-    """Dependency provider for asynchronous database sessions.
-
-    Yields:
-        AsyncSession: An active SQLAlchemy/SQLModel asynchronous session.
-    """
-    async with async_session_maker() as session:
-        yield session

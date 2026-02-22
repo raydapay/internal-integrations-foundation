@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="box">
+    <div class="is-flex is-justify-content-space-between is-align-items-center mb-4">
+        <h3 class="title is-5 mb-0">Reconciliation Audit Log</h3>
+        <div class="control has-icons-left" style="width: 300px;">
+            <input class="input" type="text" name="query" placeholder="Search keys, IDs, or details..."
+                   hx-get="/admin/audit"
+                   hx-trigger="keyup changed delay:500ms"
+                   hx-target="#audit-tbody"
+                   hx-indicator=".loader">
+            <span class="icon is-small is-left">🔍</span>
+        </div>
+    </div>
+
+    <div class="tabs is-toggle is-small mb-4">
+        <ul>
+            <li class="is-active" id="tab-all">
+                <a hx-get="/admin/audit" hx-target="#audit-tbody" hx-indicator=".loader"
+                onclick="document.querySelectorAll('.tabs li').forEach(el => el.classList.remove('is-active')); this.parentElement.classList.add('is-active');">
+                    <span>All Operations</span>
+                </a>
+            </li>
+            <li id="tab-dlq">
+                <a hx-get="/admin/audit?operation=error" hx-target="#audit-tbody" hx-indicator=".loader"
+                onclick="document.querySelectorAll('.tabs li').forEach(el => el.classList.remove('is-active')); this.parentElement.classList.add('is-active');">
+                    <span class="has-text-danger">Dead-Letter Queue (Errors)</span>
+                </a>
+            </li>
+        </ul>
+    </div>
+
+    <div class="table-container">
+        <table class="table is-fullwidth is-striped is-hoverable is-narrow" style="table-layout: fixed; width: 100%;">
+            <thead>
+                <tr>
+                    <th style="width: 15%;">Timestamp (UTC)</th>
+                    <th style="width: 10%;">Vector</th>
+                    <th style="width: 15%;">PF Task</th>
+                    <th style="width: 15%;">Jira Issue</th>
+                    <th style="width: 10%;">Operation</th>
+                    <th style="width: 35%;">Deltas / Details</th>
+                </tr>
+            </thead>
+            <tbody id="audit-tbody">
+                {% include "partials/_audit_tbody.html" %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

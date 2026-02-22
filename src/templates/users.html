@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="box">
+    <h3 class="title is-5">System Users</h3>
+    <p class="subtitle is-6 mb-4">Manage access controls, approve JIT provisions, and assign RBAC tiers.</p>
+
+    <form hx-post="/admin/users" class="mb-5">
+        <div class="field is-grouped">
+            <p class="control is-expanded">
+                <input class="input" type="email" name="email" placeholder="New user email (e.g., colleague@todapay.com)" required>
+            </p>
+            <p class="control">
+                <span class="select">
+                    <select name="role">
+                        <option value="viewer">Viewer</option>
+                        <option value="pf_jira_admin">PF-Jira Admin</option>
+                        <option value="system_admin">System Admin</option>
+                    </select>
+                </span>
+            </p>
+            <p class="control">
+                <button type="submit" class="button is-primary">Pre-provision User</button>
+            </p>
+        </div>
+    </form>
+
+    <table class="table is-fullwidth is-hoverable is-vcentered">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Identity</th>
+                <th>Created</th>
+                <th>Status</th>
+                <th>Role Tier</th>
+                <th>Action</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for target_user in system_users %}
+            <tr>
+                <form hx-post="/admin/users/{{ target_user.id }}" hx-target="#toast-container" hx-swap="beforeend">
+                    <td>{{ target_user.id }}</td>
+                    <td>
+                        <div class="is-flex is-align-items-center">
+                            {% if target_user.avatar_url %}
+                            <figure class="image is-32x32 mr-2">
+                                <img class="is-rounded" src="{{ target_user.avatar_url }}">
+                            </figure>
+                            {% endif %}
+                            <div>
+                                <strong>{{ target_user.full_name }}</strong><br>
+                                <span class="is-size-7 has-text-grey">{{ target_user.email }}</span>
+                            </div>
+                        </div>
+                    </td>
+                    <td><span class="is-size-7">{{ target_user.created_at.strftime('%Y-%m-%d') }}</span></td>
+                    <td>
+                        <label class="checkbox">
+                            <input type="checkbox" name="is_active" value="true" {% if target_user.is_active %}checked{% endif %}>
+                            Active
+                        </label>
+                    </td>
+                    <td>
+                        <div class="select is-small">
+                            <select name="role">
+                                <option value="viewer" {% if target_user.role.value == 'viewer' %}selected{% endif %}>Viewer</option>
+                                <option value="pf_jira_admin" {% if target_user.role.value == 'pf_jira_admin' %}selected{% endif %}>PF-Jira Admin</option>
+                                <option value="system_admin" {% if target_user.role.value == 'system_admin' %}selected{% endif %}>System Admin</option>
+                            </select>
+                        </div>
+                    </td>
+                    <td>
+                        <div class="buttons are-small is-flex-nowrap">
+                            <button type="submit" class="button is-primary is-outlined">Save</button>
+                            <button type="button" class="button is-danger is-outlined"
+                                    hx-delete="/admin/users/{{ target_user.id }}"
+                                    hx-target="closest tr"
+                                    hx-swap="outerHTML"
+                                    hx-confirm="Are you sure you want to permanently delete {{ target_user.email }}?">
+                                Remove
+                            </button>
+                        </div>
+                    </td>
+                </form>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="has-text-centered">No users found in the database.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

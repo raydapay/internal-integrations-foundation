@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+
+{% block title %}Mapping Rules{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1 class="title">Routing Rules Engine</h1>
+    <p class="subtitle text-muted">Configure priority-based conditional logic for Jira dispatch.</p>
+
+    {% if user.role in ['system_admin', 'pf_jira_admin'] %}
+    <div class="box mb-5">
+        <h3 class="title is-5 mb-2">System Operations</h3>
+
+        <div class="columns is-vcentered">
+            <div class="column">
+                <p class="subtitle is-6 text-muted mb-2">Manually enqueue a delta-sync job to reconcile PeopleForce tasks with Jira.</p>
+                <button class="button is-primary is-small is-outlined has-tooltip-bottom"
+                        data-tooltip="Bypasses the polling interval to run an immediate delta-sync."
+                        hx-post="/admin/sync/pf-jira"
+                        hx-target="#toast-container"
+                        hx-swap="beforeend">
+                    Trigger Full Delta Sync
+                </button>
+            </div>
+
+            <div class="column">
+                <p class="subtitle is-6 text-muted mb-2">Verify that all targeted Jira projects exist and are accessible.</p>
+                <button class="button is-primary is-small is-outlined has-tooltip-bottom"
+                        data-tooltip="Dispatches an async job to verify project keys and identity overrides against the Atlassian API."
+                        hx-post="/admin/rules/validate/start"
+                        hx-target="#validation-container"
+                        hx-swap="innerHTML">
+                    Validate Routing Targets
+                </button>
+            </div>
+        </div>
+
+        <div id="validation-container" class="mt-3"></div>
+    </div>
+
+    <details class="box mb-5" style="cursor: pointer;">
+        <summary class="title is-5 mb-0" style="outline: none;">
+            <span class="icon"><i class="fas fa-plus-circle"></i></span> Add Routing Rule
+        </summary>
+
+        <div class="mt-4" style="cursor: default;">
+            <p class="is-size-7 mb-4">Rules are evaluated in ascending priority order. An empty condition acts as a wildcard.</p>
+
+            <form hx-post="/admin/rules/routing" hx-target="#rules-tbody" hx-swap="innerHTML">
+                <div class="columns">
+                    <div class="column is-2">
+                        <div class="field">
+                            <label class="label">Priority</label>
+                            <div class="control">
+                                <input class="input" type="number" name="priority" value="100" required>
+                            </div>
+                        </div>
+                        <div class="field mt-4">
+                            <label class="label">Action</label>
+                            <div class="control">
+                                <div class="select is-fullwidth">
+                                    <select name="action">
+                                        <option value="SYNC">SYNC</option>
+                                        <option value="DROP">DROP</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="column is-4">
+                        <h4 class="title is-6 mb-2">Conditions (IF)</h4>
+                        <div class="field">
+                            <label class="label is-small">Assignee Email Contains</label>
+                            <div class="control">
+                                <input class="input is-small" type="text" name="condition_assignee_pattern" placeholder="@it.todapay.com">
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label class="label is-small">Task Title Contains</label>
+                            <div class="control">
+                                <input class="input is-small" type="text" name="condition_title_keyword" placeholder="onboarding">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="column is-6">
+                        <h4 class="title is-6 mb-2">Mutations (THEN)</h4>
+
+                        <div class="columns is-multiline is-variable is-1 mb-0">
+                            <div class="column is-half pb-0">
+                                <div class="field">
+                                    <label class="label is-small">Target Jira Project</label>
+                                    <div class="control">
+                                        <select name="target_jira_project" class="tom-select-init" placeholder="-- No Change --">
+                                            <option value="">-- No Change --</option>
+                                            {% for p in jira_projects %}
+                                            <option value="{{ p.key }}">{{ p.name }} ({{ p.key }})</option>
+                                            {% endfor %}
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="column is-half pb-0">
+                                <div class="field">
+                                    <label class="label is-small">Jira Task Type</label>
+                                    <div class="control">
+                                        <select name="target_jira_task_type" class="tom-select-init" placeholder="-- No Change --">
+                                            <option value="">-- No Change --</option>
+                                            {% for tt in jira_task_types %}
+                                            <option value="{{ tt }}">{{ tt }}</option>
+                                            {% endfor %}
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="column is-half py-2">
+                                <div class="field">
+                                    <label class="label is-small">Inject Labels</label>
+                                    <div class="control">
+                                        <input class="input is-small " type="text" name="target_jira_labels" placeholder="comma, separated, labels">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="column is-half pt-0">
+                                <div class="field">
+                                    <label class="label is-small">Override Assignee Email</label>
+                                    <div class="control">
+                                        <input class="input is-small" type="email" name="target_assignee_email" placeholder="jane.doe@todapay.com">
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="column is-half pt-0">
+                                <div class="field">
+                                    <label class="label is-small">Override Reporter Email</label>
+                                    <div class="control">
+                                        <input class="input is-small" type="email" name="target_reporter_email" placeholder="hr.bot@todapay.com">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="field is-grouped mt-4">
+                    <div class="control">
+                        <button type="submit" class="button is-link is-small">Add Rule</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </details>
+    {% endif %}
+
+    <div class="box mt-5" style="overflow-x: auto;">
+        <h3 class="title is-5">Evaluation Matrix</h3>
+        <table class="table is-fullwidth is-striped is-hoverable is-narrow">
+            <thead>
+                <tr>
+                    <th>Priority</th>
+                    <th>Action</th>
+                    <th>Condition: Assignee</th>
+                    <th>Condition: Title</th>
+                    <th>Target: Project</th>
+                    <th>Target: Task Type</th>
+                    <th>Target: Labels</th>
+                    <th>Overrides</th>
+                    {% if user.role in ['system_admin', 'pf_jira_admin'] %}
+                    <th>Actions</th>
+                    {% endif %}
+                </tr>
+            </thead>
+            <tbody id="rules-tbody">
+                {% include "partials/_routing_rules_tbody.html" %}
+            </tbody>
+        </table>
+    </div>
+
+    <div id="modal-container"></div>
+</div>
+{% endblock %}

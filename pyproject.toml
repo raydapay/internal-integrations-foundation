@@ -1,7 +1,7 @@
 [project]
 name = "pf-jira-sync"
 version = "0.1.0"
-description = "Middleware for PeopleForce to Jira Synchronization"
+description = "Middleware / Integration platform for PeopleForce to Jira Synchronization and other nice things"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi[all]",
@@ -17,6 +17,7 @@ dependencies = [
     "jinja2",
     "python-multipart",
     "aiosqlite>=0.22.1",
+    "psutil>=7.2.2",
 ]
 
 [dependency-groups]
@@ -26,18 +27,33 @@ dev = [
     "pytest-asyncio",
     "types-redis",
     "types-requests",
-    "pre-commit>=4.5.1",
+    "pre-commit",
 ]
 
 [tool.ruff]
-line-length = 100
+line-length = 120
 target-version = "py311"
+
+# Migrated linter settings
+[tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "PL", "RUF"]
 ignore = []
 
 [tool.ruff.format]
 quote-style = "double"
 
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+    "fastapi.Form",
+    "fastapi.Header",
+    "fastapi.Cookie",
+    "fastapi.File",
+    "fastapi.Security"
+]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

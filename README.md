@@ -1,83 +1,94 @@
-# PeopleForce <-> Jira Middleware
+# Integration Gateway
 
-An asynchronous, fault-tolerant middleware designed to synchronize tasks between PeopleForce (HRIS) and Jira. It overcomes the limitations of the PeopleForce API (lack of webhooks, no delta sync) by implementing a state-reconciliation engine with distributed locking.
+An asynchronous, fault-tolerant middleware foundation designed to broker state-reconciliation, webhook ingestion, and API synchronization across disparate SaaS platforms.
 
-## ⚡ Technical Stack
+Originally conceived as a PeopleForce-to-Jira bridge, the system has evolved into a generalized **Federated Gateway / Isolated Worker** architecture, providing a robust backplane for all future internal integrations.
 
-* **Runtime:** Python 3.11+ (managed by `uv`)
+## 🏗️ Architectural Paradigm
+
+The system is strictly divided into two execution tiers to prevent I/O blocking and enforce domain isolation (see [`docs/01-SYSTEM_TOPOLOGY.md`](docs/01-SYSTEM_TOPOLOGY.md) for deeper systemic analysis):
+
+1. **The Unified Gateway (FastAPI):** Handles TLS termination, Google Workspace SSO, schema validation, and serving the Admin Dashboard via Jinja2 Server-Side Rendering (SSR).
+2. **Isolated Domain Workers (ARQ):** Background `asyncio` processes that execute third-party API communication, state-reconciliation hashing, and database mutations over Redis queues.
+
+## 🛠️ Technical Stack
+
+Every technology choice was optimized for minimal Total Cost of Ownership (TCO) and high observability (see [`docs/02-TOOLING_DECISIONS.md`](docs/02-TOOLING_DECISIONS.md)).
+
+* **Runtime:** Python 3.11+ (managed exclusively by `uv`)
 * **Framework:** FastAPI + Uvicorn
 * **Concurrency:** AsyncIO + ARQ (Redis-backed Job Queue)
 * **Database:** SQLite (WAL Mode) via SQLModel (SQLAlchemy 2.0)
-* **Observability:** Loguru (Logger) -> Seq (Log Aggregation & Dashboarding)
-* **Infrastructure:** Docker Compose + Cloudflare Tunnels
+* **Frontend (No-Build):** Jinja2, HTMX (Transactional HATEOAS), Bulma CSS, Vanilla JS Server-Sent Events (SSE)
+* **Observability:** Loguru (JSON Logger) -> Seq (Log Aggregation), `psutil` (Hardware Telemetry)
 
-## 🚀 Quick Start
+## 🚀 Core Features
+
+* **Zero-JS-Build Admin UI:** A fully functional dashboard utilizing HTMX for DOM mutations and SSE for real-time Cloudflare-proof log streaming. No React, Webpack, or Node.js required.
+* **Google SSO Security:** Edge-level access control via Authlib and session middleware.
+* **Dynamic Mapping Engine:** SQLite-backed routing rules allowing administrators to map incoming SaaS webhooks to specific target systems without deploying code.
+* **State Reconciliation:** Distributed locking and SHA-256 state hashing to detect API deltas when native vendor webhooks are unavailable.
+
+## 🚦 Quick Start
 
 ### 1. Prerequisites
-* [Docker Desktop](https://www.docker.com/) (or Engine)
-* [UV](https://github.com/astral-sh/uv) (Fast Python Package Manager)
+* [Docker Desktop](https://www.docker.com/) (for Redis and Seq)
+* [UV](https://github.com/astral-sh/uv) (Extremely fast Python package manager)
 
 ### 2. Installation
-Initialize the environment and install dependencies instantly:
+Initialize the environment and sync the lockfile:
 ```bash
 uv sync
 ```
 
 ### 3. Configuration
-Create a secret configuration file:
+Duplicate the example environment file and populate your Google Auth, Jira, and PeopleForce credentials:
 ```bash
 cp secrets/.env.example secrets/.env
-# Edit secrets/.env with your API keys
 ```
 
-### 4. Running the Stack
-Launch the Application, Redis, and Seq:
+### 4. Running the Stack (Local Bare-Metal execution)
+To leverage rapid hot-reloading during development, run the infrastructure in Docker, but execute the Python processes natively:
+
+**Terminal 1 (Infrastructure):**
 ```bash
-docker compose up -d
+docker compose up redis seq -d
 ```
-* **API Docs:** [http://localhost:8000/docs](http://localhost:8000/docs)
-* **Log Dashboard (Seq):** [http://localhost:5341](http://localhost:5341)
 
-## 🏗 Architecture
+**Terminal 2 (The Gateway):**
+```bash
+uv run uvicorn src.app.main:app --reload
+```
 
-### Directory Structure
-* `src/core`: Database, Logging, and Security configuration.
-* `src/domain`: Feature modules (Sync logic, Webhooks, Auth).
-* `src/app`: Entry points and Middleware.
+**Terminal 3 (The Domain Worker):**
+```bash
+uv run arq src.domain.pf_jira.tasks.WorkerSettings --watch src
+```
 
-### Queue System (ARQ)
-We use **ARQ** for background processing to avoid blocking the FastAPI event loop during heavy I/O (e.g., polling PeopleForce).
-* **Producer:** FastAPI routes push jobs to Redis.
-* **Consumer:** ARQ worker process executes jobs (configured in `src/app/worker.py`).
+* **Integration Dashboard:** [http://localhost:8000/admin](http://localhost:8000/admin)
+* **Log Aggregation (Seq):** [http://localhost:5341](http://localhost:5341)
 
-## 🌐 Cloudflare Tunnel Setup (Webhooks)
+## 🏗️ Architectural Paradigm
 
-To receive `jira:issue_updated` events on your local machine without opening ports:
+The system is strictly divided into two execution tiers to prevent I/O blocking and enforce domain isolation (see [`docs/01-SYSTEM_TOPOLOGY.md`](docs/01-SYSTEM_TOPOLOGY.md) for deeper systemic analysis).
 
-1.  **Install `cloudflared`:**
-    ```bash
-    # Debian/Ubuntu
-    sudo apt-get update && sudo apt-get install cloudflared
-    ```
+*For a detailed breakdown of the synchronization polling, webhook cryptography, and Jira configuration, see [`docs/03-STATE_SYNC_MECHANICS.md`](docs/03-STATE_SYNC_MECHANICS.md).*
 
-2.  **Authenticate & Create Tunnel:**
-    ```bash
-    cloudflared tunnel login
-    cloudflared tunnel create pf-jira-sync
-    cloudflared tunnel route dns pf-jira-sync dev-sync.yourdomain.com
-    ```
+## 📂 Project Structure
 
-3.  **Configure Ingress (`~/.cloudflared/config.yml`):**
-    ```yaml
-    tunnel: <UUID>
-    credentials-file: /home/<user>/.cloudflared/<UUID>.json
-    ingress:
-      - hostname: dev-sync.yourdomain.com
-        service: [http://127.0.0.1:8000](http://127.0.0.1:8000)
-      - service: http_status:404
-    ```
-
-4.  **Run:**
-    ```bash
-    cloudflared tunnel run pf-jira-sync
-    ```
+```text
+├── data/                  # SQLite WAL database files (gitignored)
+├── docs/                  # Architectural Decision Records (ADRs)
+├── secrets/               # Environment variables and OAuth JSONs
+├── src/
+│   ├── app/               # FastAPI ingress, Admin UI routes, Lifespan
+│   ├── config/            # Pydantic BaseSettings
+│   ├── core/              # Global dependencies (Clients, DB, Broadcaster)
+│   ├── domain/            # Isolated business logic boundaries
+│   │   ├── pf_jira/       # PeopleForce <-> Jira reconciliation
+│   │   ├── users/         # SSO and Identity models
+│   │   └── webhooks/      # Ingress payload routing
+│   ├── static/            # Bulma custom CSS & SSE Vanilla JS
+│   └── templates/         # Jinja2 Layouts and HTMX partial fragments
+└── tests/                 # Unittest suites (E2E and Mocks)
+```

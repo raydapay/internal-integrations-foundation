@@ -1,0 +1,56 @@
+{% for log in logs %}
+<tr>
+    <td class="is-vcentered"><span class="is-size-7">{{ log.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</span></td>
+    <td class="is-vcentered"><span class="tag  is-outlined">{{ log.direction }}</span></td>
+    <td class="is-vcentered">
+        {% if log.pf_task_id %}
+        <a href="{{ pf_url }}/tasks/{{ log.pf_task_id }}" target="_blank" class="has-text-weight-bold">
+            {{ log.pf_task_id }}
+        </a>
+        {% else %}
+        N/A
+        {% endif %}
+    </td>
+    <td class="is-vcentered">
+        {% if log.jira_issue_key %}
+        <a href="https://todapay.atlassian.net/browse/{{ log.jira_issue_key }}" target="_blank" class="has-text-weight-bold">
+            {{ log.jira_issue_key }}
+        </a>
+        {% else %}
+        N/A
+        {% endif %}
+    </td>
+    <td class="is-vcentered">
+        <span class="tag
+            {% if log.operation.value == 'create' %}is-success
+            {% elif log.operation.value == 'update' %}is-info
+            {% elif log.operation.value == 'error' %}is-danger
+            {% else %}is-light{% endif %}">
+            {{ log.operation.value | upper }}
+        </span>
+    </td>
+    <td>
+        <details>
+            <summary class="is-clickable has-text-link is-size-7">View Payload</summary>
+            <div class="mt-2" style="overflow-x: auto; border-radius: 4px;">
+                <pre class="is-size-7 p-3 has-background-black-ter has-text-grey-lighter" style="border: 1px solid #363636;">{{ log.details }}</pre>
+            </div>
+        </details>
+    </td>
+</tr>
+{% else %}
+<tr><td colspan="6" class="has-text-centered has-text-grey py-5">No audit records match the current query.</td></tr>
+{% endfor %}
+
+{% if has_next %}
+<tr>
+    <td colspan="6" class="has-text-centered">
+        <button class="button is-small is-ghost"
+                hx-get="/admin/audit?page={{ page + 1 }}&query={{ query }}"
+                hx-target="closest tr"
+                hx-swap="outerHTML">
+            Load More...
+        </button>
+    </td>
+</tr>
+{% endif %}

@@ -1,0 +1,47 @@
+{% if status == 'processing' %}
+    <div class="notification is-info"
+         hx-get="/admin/rules/validate/status"
+         hx-trigger="every 2s"
+         hx-swap="outerHTML">
+        <span class="icon"><i class="fas fa-spinner fa-spin"></i></span>
+        <span>Validating routing targets against Atlassian API. Please wait...</span>
+    </div>
+
+{% elif status == 'completed' %}
+    <div class="notification" id="validation-result-banner">
+        <button class="delete" onclick="this.parentElement.remove()"></button>
+        <h5 class="title is-6 mb-2">Validation Complete</h5>
+        <ul>
+            {% for item in details %}
+                <li class="mb-1">
+                    {% if item.valid %}
+                        <span class="tag is-success mr-2">PASS</span>
+                    {% else %}
+                        <span class="tag is-danger mr-2">FAIL</span>
+                    {% endif %}
+                    <strong>{{ item.project }}</strong>: {{ item.message }}
+                </li>
+            {% else %}
+                <li><span class="has-text-grey">No specific project targets configured to validate.</span></li>
+            {% endfor %}
+        </ul>
+        <script>
+            setTimeout(() => {
+                const el = document.getElementById('validation-result-banner');
+                if (el) el.remove();
+            }, 20000);
+        </script>
+    </div>
+
+{% elif status == 'failed' %}
+    <div class="notification is-danger" id="validation-error-banner">
+        <button class="delete" onclick="this.parentElement.remove()"></button>
+        <strong>Validation Failed:</strong> {{ error }}
+        <script>
+            setTimeout(() => {
+                const el = document.getElementById('validation-error-banner');
+                if (el) el.remove();
+            }, 20000);
+        </script>
+    </div>
+{% endif %}

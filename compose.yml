@@ -13,14 +13,30 @@ services:
     depends_on:
       - redis
       - seq
-    # Note: When running inside Docker, this uses the internal hostnames defined below.
+    # The Gateway Router
     command: uvicorn src.app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker_pf_jira:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: pf_sync_worker_pf_jira
+    env_file: ./secrets/.env
+    volumes:
+      - ./src:/app/src
+      - ./data:/app/data
+    depends_on:
+      - redis
+      - seq
+    # The Isolated Domain Worker
+    command: arq src.domain.pf_jira.tasks.WorkerSettings
+    restart: unless-stopped
 
   redis:
     image: redis:alpine
     container_name: pf_sync_redis
     ports:
-      - "6379:6379" # <--- ADDED: Expose to Host for local dev
+      - "6379:6379"
     volumes:
       - redis_data:/data
     restart: unless-stopped
@@ -30,10 +46,10 @@ services:
     container_name: pf_sync_seq
     environment:
       - ACCEPT_EULA=Y
-      - SEQ_FIRSTRUN_ADMINPASSWORD=InternalDev123! # <--- REQUIRED: Initial admin password
+      - SEQ_FIRSTRUN_ADMINPASSWORD=InternalDev123!
     ports:
-      - "5341:80"   # Exposes UI and API to Host
-      - "5342:5341" # Internal ingestion port if needed, usually 80 mapped to host is enough
+      - "5341:80"
+      - "5342:5341"
     volumes:
       - seq_data:/data
     restart: unless-stopped

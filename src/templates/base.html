@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="system">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Integration Gateway</title>
+    <link  rel="stylesheet"  href="https://cdn.jsdelivr.net/npm/bulma@1.0.4/css/bulma.min.css">
+    <link href="https://cdn.jsdelivr.net/npm/tom-select@2.5.1/dist/css/tom-select.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@creativebulma/bulma-tooltip@1.2.0/dist/bulma-tooltip.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.8/dist/htmx.min.js" integrity="sha384-/TgkGk7p307TH7EXJDuUlgG3Ce1UVolAOFopFekQkkXihi5u/6OCvVKyz1W+idaz" crossorigin="anonymous"></script>
+    <style>
+        .log-console {
+            background-color: var(--bulma-background);
+            color: var(--bulma-text);
+            font-family: monospace;
+            height: 400px;
+            overflow-y: auto;
+            padding: 1rem;
+            border-radius: var(--bulma-radius);
+            border: 1px solid var(--bulma-border);
+        }
+        .log-error { color: var(--bulma-danger); font-weight: bold; }
+        .log-info { color: var(--bulma-primary); }
+
+        /* Toast Container */
+        #toast-container { position: fixed; top: 20px; right: 20px; z-index: 9999; max-width: 400px;}
+    </style>
+    <style>
+        .ts-control, .ts-dropdown {
+            background-color: var(--bulma-scheme-main) !important;
+            border-color: var(--bulma-border) !important;
+            color: var(--bulma-text) !important;
+        }
+        .ts-control {
+            border-radius: var(--bulma-radius) !important;
+            min-height: 2.5em; /* Matches Bulma standard control height */
+            padding-top: calc(0.375em - 1px) !important;
+            padding-bottom: calc(0.375em - 1px) !important;
+        }
+        .ts-control > input {
+            color: var(--bulma-text) !important;
+        }
+        .ts-dropdown .option {
+            color: var(--bulma-text) !important;
+        }
+        .ts-dropdown .option:hover, .ts-dropdown .option.active {
+            background-color: var(--bulma-background) !important;
+            color: var(--bulma-text-strong) !important;
+        }
+        .ts-control.focus {
+            border-color: var(--bulma-link) !important;
+            box-shadow: 0 0 0 0.125em var(--bulma-link-fade) !important;
+        }
+    </style>
+</head>
+<body style="min-height: 100vh; display: flex; flex-direction: column;">
+    <nav class="navbar is-dark" role="navigation" aria-label="main navigation">
+        <div class="navbar-brand">
+            <a href="/admin" class="navbar-item has-text-weight-bold is-size-5">
+                Integration Gateway
+            </a>
+        </div>
+
+        <div class="navbar-menu is-active">
+            <div class="navbar-start">
+                <div class="navbar-item has-dropdown is-hoverable">
+                    <a class="navbar-link">PF ↔ Jira</a>
+                    <div class="navbar-dropdown">
+                        <a href="/admin/rules" class="navbar-item">Mapping Rules</a>
+                        <a href="/admin/audit" class="navbar-item">Audit Log</a>
+                        <a href="/admin/settings" class="navbar-item">Settings</a>
+                    </div>
+                </div>
+
+                <div class="navbar-item has-dropdown is-hoverable">
+                    <a class="navbar-link">System</a>
+                    <div class="navbar-dropdown">
+                        <a href="/admin/telemetry" class="navbar-item">Live Telemetry</a>
+                        <a href="/admin/health" class="navbar-item">Health & Metrics</a>
+                        {% if user.role in ['system_admin'] %}
+                        <a href="/admin/users" class="navbar-item">Users</a>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <div class="navbar-end">
+                <div class="navbar-item">
+                    <figure class="image is-32x32 mr-2">
+                        <img class="is-rounded" src="{{ user.picture }}" alt="Avatar">
+                    </figure>
+                    <span>{{ user.name }}</span>
+                </div>
+                <a href="/auth/logout" class="navbar-item">Logout</a>
+            </div>
+        </div>
+    </nav>
+    <div id="toast-container"></div>
+
+    <script>
+        document.body.addEventListener('htmx:responseError', function (evt) {
+            const xhr = evt.detail.xhr;
+            let errorMessage = `Error ${xhr.status}: ${xhr.statusText}`;
+
+            // Attempt to parse FastAPI/Pydantic validation details gracefully
+            try {
+                const response = JSON.parse(xhr.responseText);
+                if (response.detail) {
+                    if (Array.isArray(response.detail)) {
+                        // Map Pydantic array validation errors into a readable string
+                        errorMessage = response.detail.map(e => `<strong>${e.loc[e.loc.length - 1]}</strong>: ${e.msg}`).join('<br>');
+                    } else if (typeof response.detail === 'string') {
+                        errorMessage = response.detail;
+                    }
+                }
+            } catch (e) {
+                // Not JSON or unparseable; fallback to default status message
+            }
+
+            // Create Bulma Toast
+            const toast = document.createElement('div');
+            toast.className = 'notification is-danger is-light mb-2';
+            toast.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
+            toast.innerHTML = `
+                <button class="delete"></button>
+                ${errorMessage}
+            `;
+
+            // Bind manual dismissal
+            toast.querySelector('.delete').addEventListener('click', () => toast.remove());
+
+            // Append to DOM
+            document.getElementById('toast-container').appendChild(toast);
+
+            // Auto-dismiss after 5 seconds
+            setTimeout(() => {
+                if (toast.parentNode) {
+                    toast.remove();
+                }
+            }, 5000);
+        });
+    </script>
+
+    <section class="section">
+        <div class="container">
+            {% block content %}{% endblock %}
+        </div>
+    </section>
+
+    <script src="/static/js/sse_client.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tom-select@2.5.1/dist/js/tom-select.complete.min.js" integrity="sha256-PBFK0sNZwLYi+Ff2hB+YcKuXMVtTLjUjNNRVLi/jHkY=" crossorigin="anonymous"></script>
+
+    <script>
+        function initTomSelect(root = document) {
+            root.querySelectorAll('.tom-select-init').forEach((el) => {
+                // Prevent double initialization
+                if (!el.tomselect) {
+                    new TomSelect(el, {
+                        create: false,
+                        sortField: { field: "text", direction: "asc" }
+                    });
+                }
+            });
+        }
+
+        // Initialize on first page load
+        document.addEventListener("DOMContentLoaded", () => initTomSelect());
+
+        // Initialize on dynamic HTMX injections (like the Edit Modal)
+        document.body.addEventListener('htmx:load', function(evt) {
+            initTomSelect(evt.detail.elt);
+        });
+    </script>
+</body>
+</html>
+

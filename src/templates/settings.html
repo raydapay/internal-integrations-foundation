@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+
+{% block title %}Global Settings{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1 class="title">Global Settings</h1>
+    <p class="subtitle text-muted">Manage core execution parameters and default fallback values.</p>
+
+    <div class="box">
+        <form hx-post="/admin/settings" hx-target="#toast-container" hx-swap="beforeend">
+
+            <div class="field">
+                <label class="label">Master Execution Switch</label>
+                <div class="control">
+                    <label class="checkbox">
+                        <input type="checkbox" name="is_active" value="true" {% if config and config.is_active %}checked{% endif %}>
+                        <strong>Enable background synchronization (PeopleForce ↔ Jira)</strong>
+                    </label>
+                </div>
+                <p class="help text-muted">Unchecking this instantly yields the worker without killing the underlying OS process.</p>
+            </div>
+
+            <hr class="my-5">
+
+            <div class="columns">
+                <div class="column is-6">
+                    <div class="field">
+                        <label class="label">Polling Interval (Seconds)</label>
+                        <div class="control">
+                            <input class="input" type="number" name="polling_interval_seconds" value="{{ config.polling_interval_seconds if config else 300 }}" min="10" required>
+                        </div>
+                        <p class="help text-muted">How frequently the engine queries the PeopleForce API for new or updated tasks. Recommended: 60 - 300.</p>
+                    </div>
+                </div>
+
+                <div class="column is-6">
+                    <div class="field">
+                        <label class="label">Default Jira Project</label>
+                        <div class="control">
+                            <select name="default_jira_project" class="tom-select-init" placeholder="-- None --">
+                                <option value="">-- None --</option>
+                                {% for p in jira_projects %}
+                                <option value="{{ p.key }}" {% if config and config.default_jira_project == p.key %}selected{% endif %}>{{ p.name }} ({{ p.key }})</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <p class="help text-muted mt-2">The ultimate fallback destination if a task passes the firewall but matches no specific routing rules.</p>
+                    </div>
+                </div>
+            </div>
+            <hr class="my-5">
+            <h3 class="title is-5">Jira Integration Constants</h3>
+
+            <div class="columns is-multiline">
+                <div class="column is-6">
+                    <div class="field">
+                        <label class="label">PeopleForce Task ID Field</label>
+                        <div class="control">
+                            <input class="input" type="text" name="jira_pf_task_id_custom_field" value="{{ config.jira_pf_task_id_custom_field if config else 'customfield_10048' }}" required>
+                        </div>
+                        <p class="help text-muted">The internal Jira Custom Field ID used to track the PF Task ID.</p>
+                    </div>
+                </div>
+
+                <div class="column is-6">
+                    <div class="field">
+                        <label class="label">Fallback Account ID</label>
+                        <div class="control">
+                            <input class="input" type="text" name="jira_fallback_account_id" value="{{ config.jira_fallback_account_id if config else '' }}">
+                        </div>
+                        <p class="help text-muted">The Jira Account ID to assign tasks to if identity mapping fails.</p>
+                    </div>
+                </div>
+            </div>
+            <hr class="my-5">
+            <h3 class="title is-5">Health & Alerting Thresholds</h3>
+            <p class="subtitle is-6 text-muted mb-4">Set to 0 to disable a specific check.</p>
+
+            <div class="columns is-multiline">
+
+                <div class="column is-6">
+                    <div class="field">
+                        <label class="label">
+                            Health Check Interval (Seconds)
+                            <span class="has-text-grey-light has-tooltip-right has-tooltip-multiline ml-1" data-tooltip="How often the background worker evaluates system memory, disk space, and API connectivity." style="border-bottom: none; cursor: help;">&#9432;</span>
+                        </label>
+                        <div class="control">
+                            <input class="input" type="number" name="health_check_interval_seconds" value="{{ config.health_check_interval_seconds if config else 900 }}" min="60" required>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="column is-6">
+                    <div class="field">
+                        <label class="label">
+                            ARQ Queue Depth Limit
+                            <span class="has-text-grey-light has-tooltip-right has-tooltip-multiline ml-1" data-tooltip="Triggers a Slack/Telegram alert if the asynchronous job queue backlogs beyond this threshold." style="border-bottom: none; cursor: help;">&#9432;</span>
+                        </label>
+                        <div class="control">
+                            <input class="input" type="number" name="alert_queue_depth_threshold" value="{{ config.alert_queue_depth_threshold if config else 500 }}" min="0" required>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="column is-6">
+                    <div class="field">
+                        <label class="label">
+                            Memory Threshold (%)
+                            <span class="has-text-grey-light has-tooltip-right has-tooltip-multiline ml-1" data-tooltip="Triggers an alert if host RAM usage exceeds this percentage." style="border-bottom: none; cursor: help;">&#9432;</span>
+                        </label>
+                        <div class="control">
+                            <input class="input" type="number" step="0.1" name="alert_mem_threshold_pct" value="{{ config.alert_mem_threshold_pct if config else 90.0 }}" min="0" max="100" required>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="column is-6">
+                    <div class="field">
+                        <label class="label">
+                            Disk Threshold (%)
+                            <span class="has-text-grey-light has-tooltip-right has-tooltip-multiline ml-1" data-tooltip="Triggers an alert if host root partition space exceeds this percentage." style="border-bottom: none; cursor: help;">&#9432;</span>
+                        </label>
+                        <div class="control">
+                            <input class="input" type="number" step="0.1" name="alert_disk_threshold_pct" value="{{ config.alert_disk_threshold_pct if config else 90.0 }}" min="0" max="100" required>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <div class="field mt-5">
+                <div class="control">
+                    <button type="submit" class="button is-primary">Save Configuration</button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

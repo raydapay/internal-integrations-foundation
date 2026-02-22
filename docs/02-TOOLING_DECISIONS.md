@@ -104,6 +104,14 @@ This document outlines the architectural decisions for the PeopleForce-to-Jira M
 * **Rationale:**
     * **Data Density:** Provides Excel-like functionality (filtering, sorting, pagination) for high-density log/task views without requiring a React/Virtual-DOM runtime.
 
+### Decision: Bipartite Frontend Data Flow (HTMX + SSE)
+* **Status:** Adopted
+* **Alternatives:** Strict JSON API with Client-Side Framework (React/Vue), Vanilla JS Imperative DOM Manipulation.
+* **Rationale:**
+    * **Elimination of State Duplication:** A strict JSON API forces the browser to maintain a secondary state machine (parsing JSON, updating a local store, hydrating the DOM). HTMX relies on HATEOAS (Hypermedia As The Engine Of Application State). The backend remains the single source of truth, returning fully rendered Jinja2 HTML fragments.
+    * **Transaction vs. Telemetry:** We strictly divide the data flow. State-mutating transactions (e.g., triggering a sync) use HTMX POSTs to swap HTML fragments (toasts, table rows). Continuous observability (Seq logs, Queue depths) uses Vanilla JavaScript `EventSource` (SSE) for low-overhead, unidirectional telemetry.
+    * **Future-Proofing:** HTMX is a dependency-free, HTML-extension library. It is immune to the build-step churn (Webpack/Vite) and declarative syntax deprecations typical of JavaScript micro-frameworks, minimizing Total Cost of Ownership.
+
 ---
 
 ## 7. Observability

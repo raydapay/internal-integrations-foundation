@@ -1,0 +1,135 @@
+<div class="modal is-active" id="edit-rule-modal">
+    <div class="modal-background" onclick="document.getElementById('edit-rule-modal').remove()"></div>
+    <div class="modal-card" style="width: 800px; max-width: 95vw;">
+        <header class="modal-card-head">
+            <p class="modal-card-title">Edit Routing Rule</p>
+            <button class="delete" aria-label="close" onclick="document.getElementById('edit-rule-modal').remove()"></button>
+        </header>
+        <section class="modal-card-body">
+            <form id="edit-rule-form"
+                  hx-post="/admin/rules/routing/{{ rule.id }}"
+                  hx-target="#rules-tbody"
+                  hx-swap="innerHTML"
+                  hx-on::after-request="if(event.detail.successful) document.getElementById('edit-rule-modal').remove()">
+
+                <div class="columns is-multiline">
+                    <div class="column is-6">
+                        <div class="field">
+                            <label class="label is-small">Priority</label>
+                            <div class="control">
+                                <input class="input is-small" type="number" name="priority" value="{{ rule.priority }}" required>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="column is-6">
+                        <div class="field">
+                            <label class="label is-small">Action</label>
+                            <div class="control">
+                                <div class="select is-small is-fullwidth">
+                                    <select name="action">
+                                        <option value="SYNC" {% if rule.action.value == 'SYNC' %}selected{% endif %}>SYNC</option>
+                                        <option value="DROP" {% if rule.action.value == 'DROP' %}selected{% endif %}>DROP</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="column is-12"><hr class="my-2"></div>
+                    <div class="column is-12"><h4 class="title is-6 mb-1">Conditions</h4></div>
+
+                    <div class="column is-6">
+                        <div class="field">
+                            <label class="label is-small">Assignee Email Contains</label>
+                            <div class="control">
+                                <input class="input is-small" type="text" name="condition_assignee_pattern" value="{{ rule.condition_assignee_pattern or '' }}">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="column is-6">
+                        <div class="field">
+                            <label class="label is-small">Task Title Contains</label>
+                            <div class="control">
+                                <input class="input is-small" type="text" name="condition_title_keyword" value="{{ rule.condition_title_keyword or '' }}">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="column is-12"><hr class="my-2"></div>
+                    <div class="column is-12"><h4 class="title is-6 mb-1">Mutations & Overrides</h4></div>
+
+                    <div class="column is-6">
+                        <div class="field">
+                            <label class="label is-small">Target Jira Project</label>
+                            <div class="control">
+                                <div class="select is-small is-fullwidth">
+                                    <select name="target_jira_project">
+                                        <option value="">-- No Change --</option>
+                                        {% for p in jira_projects %}
+                                        <option value="{{ p.key }}" {% if rule.target_jira_project == p.key %}selected{% endif %}>{{ p.name }} ({{ p.key }})</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="column is-6">
+                        <div class="field">
+                            <label class="label is-small">Jira Task Type</label>
+                            <div class="control">
+                                <div class="select is-small is-fullwidth">
+                                    <select name="target_jira_task_type">
+                                        <option value="">-- No Change --</option>
+                                        {% for tt in jira_task_types %}
+                                        <option value="{{ tt }}" {% if rule.target_jira_task_type == tt %}selected{% endif %}>{{ tt }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="column is-12">
+                        <div class="field">
+                            <label class="label is-small">Inject Labels (comma-separated)</label>
+                            <div class="control">
+                                <input class="input is-small" type="text" name="target_jira_labels" value="{{ rule.target_jira_labels or '' }}">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="column is-6">
+                        <div class="field">
+                            <label class="label is-small">Target Jira Project</label>
+                            <div class="control">
+                                <select name="target_jira_project" class="tom-select-init" placeholder="-- No Change --">
+                                    <option value="">-- No Change --</option>
+                                    {% for p in jira_projects %}
+                                    <option value="{{ p.key }}" {% if rule.target_jira_project == p.key %}selected{% endif %}>{{ p.name }} ({{ p.key }})</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="column is-6">
+                        <div class="field">
+                            <label class="label is-small">Jira Task Type</label>
+                            <div class="control">
+                                <select name="target_jira_task_type" class="tom-select-init" placeholder="-- No Change --">
+                                    <option value="">-- No Change --</option>
+                                    {% for tt in jira_task_types %}
+                                    <option value="{{ tt }}" {% if rule.target_jira_task_type == tt %}selected{% endif %}>{{ tt }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </form>
+        </section>
+        <footer class="modal-card-foot">
+            <button class="button is-success" type="submit" form="edit-rule-form">Save Changes</button>
+            <button class="button" onclick="document.getElementById('edit-rule-modal').remove()">Cancel</button>
+        </footer>
+    </div>
+</div>

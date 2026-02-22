@@ -1,0 +1,15 @@
+<div class="notification is-{{ level }} is-light mb-2">
+    <button class="delete" onclick="this.parentElement.remove()"></button>
+    {{ message }}
+<script>
+        // Capture the script element synchronously before the event loop continues
+        (function() {
+            const capturedScript = document.currentScript;
+            setTimeout(() => {
+                if (capturedScript && capturedScript.parentElement) {
+                    capturedScript.parentElement.remove();
+                }
+            }, 5000);
+        })();
+    </script>
+</div>

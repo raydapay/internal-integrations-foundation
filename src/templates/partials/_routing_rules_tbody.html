@@ -1,0 +1,91 @@
+{% for rule in routing_rules %}
+<tr id="rule-row-{{ rule.id }}">
+    <td><strong>{{ rule.priority }}</strong></td>
+    <td>
+        {% if rule.action.value == 'drop' or rule.action == 'DROP' %}
+            <span class="tag is-danger">DROP</span>
+        {% else %}
+            <span class="tag is-success">SYNC</span>
+        {% endif %}
+    </td>
+
+    <td>
+        {% if rule.condition_assignee_pattern %}
+            <span class="tag is-info">{{ rule.condition_assignee_pattern }}</span>
+        {% else %}
+            <span class="has-text-grey-light">ANY</span>
+        {% endif %}
+    </td>
+    <td>
+        {% if rule.condition_title_keyword %}
+            <span class="tag is-warning">{{ rule.condition_title_keyword }}</span>
+        {% else %}
+            <span class="has-text-grey-light">ANY</span>
+        {% endif %}
+    </td>
+
+    <td>
+        {% if rule.target_jira_project %}
+            <strong>{{ rule.target_jira_project }}</strong>
+        {% else %}
+            <span class="has-text-grey-light">-</span>
+        {% endif %}
+    </td>
+    <td>
+        {% if rule.target_jira_task_type %}
+            {{ rule.target_jira_task_type }}
+        {% else %}
+            <span class="has-text-grey-light">-</span>
+        {% endif %}
+    </td>
+    <td>
+        {% if rule.target_jira_labels %}
+            {% for label in rule.target_jira_labels.split(',') %}
+                <span class="tag is-success">{{ label.strip() }}</span>
+            {% endfor %}
+        {% else %}
+            <span class="has-text-grey-light">-</span>
+        {% endif %}
+    </td>
+
+    <td>
+        {% if rule.target_assignee_email or rule.target_reporter_email %}
+            <div class="is-size-7">
+                {% if rule.target_assignee_email %}
+                    <div><strong>A:</strong> {{ rule.target_assignee_email }}</div>
+                {% endif %}
+                {% if rule.target_reporter_email %}
+                    <div><strong>R:</strong> {{ rule.target_reporter_email }}</div>
+                {% endif %}
+            </div>
+        {% else %}
+            <span class="has-text-grey-light">-</span>
+        {% endif %}
+    </td>
+
+    {% if user.role in ['system_admin', 'pf_jira_admin'] %}
+    <td>
+        <div class="buttons are-small">
+            <button class="button is-info is-outlined"
+                    hx-get="/admin/rules/routing/{{ rule.id }}/edit"
+                    hx-target="#modal-container"
+                    hx-swap="innerHTML">
+                Edit
+            </button>
+            <button class="button is-danger is-outlined"
+                    hx-delete="/admin/rules/routing/{{ rule.id }}"
+                    hx-target="#rule-row-{{ rule.id }}"
+                    hx-swap="outerHTML">
+                Delete
+            </button>
+        </div>
+    </td>
+    {% endif %}
+</tr>
+{% else %}
+<tr>
+    <td colspan="9" class="has-text-centered has-text-grey">
+        No routing rules configured. The system will rely on environment variable defaults.
+    </td>
+</tr>
+{% endfor %}

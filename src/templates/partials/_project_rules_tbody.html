@@ -1,0 +1,34 @@
+{% for rule in project_rules %}
+<tr>
+    <td class="is-vcentered"><code>{{ rule.assignee_email_pattern }}</code></td>
+    <td class="is-vcentered"><strong>{{ rule.target_jira_project }}</strong></td>
+    <td class="is-vcentered">
+        {% if rule.is_active %}
+        <span class="tag is-success is-light">Active</span>
+        {% else %}
+        <span class="tag is-danger is-light">Disabled</span>
+        {% endif %}
+    </td>
+    <td>
+        {% if user.role in ['system_admin', 'pf_jira_admin'] %}
+        <div class="buttons are-small mb-0">
+            <button class="button is-info is-outlined"
+                    hx-get="/admin/rules/project/{{ rule.target_jira_project }}/validate"
+                    hx-target="#toast-container"
+                    hx-swap="beforeend">
+                Verify Access
+            </button>
+            <button class="button is-danger is-outlined"
+                    hx-delete="/admin/rules/project/{{ rule.id }}"
+                    hx-target="closest tr"
+                    hx-swap="outerHTML"
+                    hx-confirm="Delete routing rule for {{ rule.assignee_email_pattern }}?">
+                Remove
+            </button>
+        </div>
+        {% endif %}
+    </td>
+</tr>
+{% else %}
+<tr><td colspan="4" class="has-text-centered has-text-grey py-4">No routing rules configured. Falling back to default project.</td></tr>
+{% endfor %}

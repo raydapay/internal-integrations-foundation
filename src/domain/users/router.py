@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -7,9 +6,10 @@ from loguru import logger
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from src.config.settings import settings
 from src.core.database import get_session
 from src.core.security import get_oauth
-from src.domain.users.models import User
+from src.domain.users.models import User, UserRole
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -46,10 +46,8 @@ async def login(request: Request) -> RedirectResponse:
 
 
 @router.get("/google", name="auth_google")
-async def auth_google(
-    request: Request, session: Annotated[AsyncSession, Depends(get_session)]
-) -> RedirectResponse:
-    """Callback for Google OAuth2. Handles JIT user provisioning.
+async def auth_google(request: Request, session: Annotated[AsyncSession, Depends(get_session)]) -> RedirectResponse:
+    """Callback for Google OAuth2. Handles JIT user provisioning and identity sync.
 
     Args:
         request: The incoming HTTP request containing the authorization code.
@@ -66,7 +64,7 @@ async def auth_google(
         token = await oauth.google.authorize_access_token(request)
     except Exception as e:
         logger.error(f"OAuth token exchange failed: {e}")
-        raise HTTPException(status_code=400, detail="Authentication failed")  # noqa: B904
+        raise HTTPException(status_code=400, detail="Authentication failed") from e
 
     user_info = token.get("userinfo")
     if not user_info:
@@ -74,33 +72,60 @@ async def auth_google(
         raise HTTPException(status_code=400, detail="No user info received")
 
     email = user_info.get("email")
+    sso_name = user_info.get("name", "Unknown")
+    sso_picture = user_info.get("picture")
 
     statement = select(User).where(User.email == email)
     result = await session.exec(statement)
     user = result.first()
 
+    # Bootstrap the initial admin if configured in settings
+    is_initial_admin = getattr(settings, "INITIAL_ADMIN_EMAIL", None) == email
+
     if not user:
-        logger.info(f"Provisioning new user: {email}")
+        # 1. Standard JIT Provisioning for completely unknown users
+        logger.info(f"Provisioning new JIT user: {email} (Active: {is_initial_admin})")
         user = User(
             email=email,
-            full_name=user_info.get("name", "Unknown"),
-            avatar_url=user_info.get("picture"),
+            full_name=sso_name,
+            avatar_url=sso_picture,
+            is_active=is_initial_admin,
+            role=UserRole.SYSTEM_ADMIN if is_initial_admin else UserRole.VIEWER,
         )
         session.add(user)
+        await session.commit()
+        await session.refresh(user)
     else:
-        user.last_login = datetime.utcnow()
-        user.avatar_url = user_info.get("picture")
-        user.full_name = user_info.get("name", user.full_name)
-        session.add(user)
+        # 2. Identity Synchronization for pre-provisioned or returning users
+        db_mutated = False
 
-    await session.commit()
-    await session.refresh(user)
+        # Overwrite the placeholder if the user was pre-provisioned by an admin
+        if user.full_name in ["Pending SSO Login", "Unknown"] or not user.full_name:
+            user.full_name = sso_name
+            db_mutated = True
 
+        # Keep the avatar fresh if they changed it on their Google account
+        if user.avatar_url != sso_picture:
+            user.avatar_url = sso_picture
+            db_mutated = True
+
+        if db_mutated:
+            logger.info(f"Synchronizing SSO identity payload for existing user: {email}")
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+
+    if not user.is_active:
+        logger.warning(f"Blocked login for inactive user: {email}")
+        raise HTTPException(status_code=403, detail="Account created but pending administrator approval.")
+
+    # Proceed with setting session
     request.session["user"] = {
         "id": user.id,
         "email": user.email,
         "name": user.full_name,
         "picture": user.avatar_url,
+        "role": user.role.value,  # Inject role into session for UI routing
     }
 
     logger.info(f"User logged in: {email}")

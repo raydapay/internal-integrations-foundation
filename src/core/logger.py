@@ -76,7 +76,7 @@ def configure_logging() -> None:
     # 1. Console Sink
     logger.add(
         sys.stderr,
-        level="INFO",
+        level="DEBUG",
         format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>"
         "{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
     )

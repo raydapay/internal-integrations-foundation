@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="box">
+    <h3 class="title is-5">PeopleForce-Jira Synchronization</h3>
+    <p class="mb-4">Manually enqueue a delta-sync job to reconcile PeopleForce tasks with Jira issues.</p>
+    {% if user.role in ['system_admin', 'pf_jira_admin'] %}
+        <button class="button is-primary"
+                hx-post="/admin/sync/pf-jira"
+                hx-target="#toast-container"
+                hx-swap="beforeend">
+            Trigger Full Delta Sync
+        </button>
+    {% else %}
+        <div class="notification is-warning">You have view-only access to this integration.</div>
+    {% endif %}
+</div>
+{% endblock %}

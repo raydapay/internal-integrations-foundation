@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="columns is-multiline">
+    <div class="column is-one-third">
+        <div class="box">
+            <h3 class="title is-5">Hardware Metrics</h3>
+            <table class="table is-fullwidth is-narrow">
+                <tbody>
+                    <tr><th>CPU Usage</th><td>{{ hardware.cpu_percent }}%</td></tr>
+                    <tr><th>Memory Usage</th><td>{{ hardware.mem_percent }}% ({{ hardware.mem_used_gb }} / {{ hardware.mem_total_gb }} GB)</td></tr>
+                    <tr><th>OS Uptime</th><td>{{ hardware.uptime }}</td></tr>
+                    <tr><th>Core Temp</th><td>{{ hardware.temps }}</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="column is-one-third">
+        <div class="box">
+            <h3 class="title is-5">Infrastructure</h3>
+            <table class="table is-fullwidth is-narrow">
+                <tbody>
+                    <tr><th>ARQ Redis Pool</th>
+                        <td>
+                            {% if queue_depth != "Offline" %}
+                            <span class="tag is-success">Connected</span>
+                            {% else %}
+                            <span class="tag is-danger">Disconnected</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr><th>Active Domain Workers</th>
+                        <td>
+                            {% if workers_active > 0 %}
+                            <span class="tag is-success">{{ workers_active }} Alive</span>
+                            {% else %}
+                            <span class="tag is-danger is-light">0 Alive (Critical)</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr><th>PF-Jira Queue Depth</th><td>{{ queue_depth }} jobs</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="column is-one-third">
+        <div class="box">
+            <h3 class="title is-5">API Integrations</h3>
+            <table class="table is-fullwidth is-narrow">
+                <tbody>
+                    <tr>
+                        <th>PeopleForce v3</th>
+                        <td>
+                            <span class="tag is-{{ 'success' if integrations.peopleforce.status == 'OK' else 'danger' }}">
+                                {{ integrations.peopleforce.status }}
+                            </span>
+                            <div class="is-size-7 mt-1 has-text-grey">{{ integrations.peopleforce.detail }}</div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>Jira Cloud v3</th>
+                        <td>
+                            <span class="tag is-{{ 'success' if integrations.jira.status == 'OK' else 'danger' }}">
+                                {{ integrations.jira.status }}
+                            </span>
+                            <div class="is-size-7 mt-1 has-text-grey">{{ integrations.jira.detail }}</div>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

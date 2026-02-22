@@ -2,9 +2,12 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
+from typing import Any
 
-from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse
+import arq
+from arq.connections import RedisSettings
+from fastapi import FastAPI, Request, Response, status
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from loguru import logger
@@ -12,26 +15,34 @@ from sqlmodel import SQLModel
 from starlette.middleware.sessions import SessionMiddleware
 
 from src import version
+from src.app.admin import router as admin_router
+from src.app.webhooks import router as webhook_router
 from src.config.settings import settings
+from src.core.broadcaster import configure_sse_logger
 from src.core.database import engine
 from src.core.logger import configure_logging
+from src.domain.pf_jira.router import router as pf_jira_router
 from src.domain.users.router import router as auth_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manages the startup and shutdown lifecycle of the FastAPI application.
-
-    Args:
-        app: The FastAPI application instance.
-    """
+    """Manages the startup and shutdown lifecycle of the FastAPI application."""
     configure_logging()
+    configure_sse_logger()
 
     # Initialize SQLite schema
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
 
+    # Initialize ARQ Redis Pool
+    redis_settings = RedisSettings.from_dsn(settings.REDIS_URL)
+    app.state.arq_pool = await arq.create_pool(redis_settings)
+
     yield
+
+    # Teardown
+    await app.state.arq_pool.close()
 
 
 # --- Application Setup ---
@@ -54,9 +65,7 @@ app.add_middleware(
 
 
 @app.middleware("http")
-async def request_id_middleware(
-    request: Request, call_next: Callable[[Request], Awaitable[Response]]
-) -> Response:
+async def request_id_middleware(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
     """Injects a unique Request-ID into the logging context and response headers.
 
     Args:
@@ -112,6 +121,9 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 
 # --- Routing ---
 app.include_router(auth_router)
+app.include_router(pf_jira_router)
+app.include_router(admin_router)
+app.include_router(webhook_router)
 
 # Mount static files and templates only if the directories exist
 try:
@@ -136,18 +148,42 @@ async def health_check() -> dict[str, str]:
     }
 
 
-# Temporary endpoint to verify auth works (until we have frontend)
 @app.get("/")
-async def home(request: Request) -> dict[str, str | dict]:
-    """Root endpoint to verify authentication state.
-
-    Args:
-        request: The incoming HTTP request.
-
-    Returns:
-        dict: The current authentication status and user details if logged in.
-    """
+async def home(request: Request) -> Response:
+    """Root endpoint that routes users based on authentication state."""
     user = request.session.get("user")
     if user:
-        return {"status": "Authenticated", "user": user, "action": "Go to /auth/logout"}
-    return {"status": "Anonymous", "action": "Go to /auth/login"}
+        # Redirect authenticated users straight to the health dashboard
+        return RedirectResponse(url="/admin/health", status_code=status.HTTP_303_SEE_OTHER)
+
+    # Redirect anonymous users to the SSO flow
+    return RedirectResponse(url="/auth/login", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/api/v1/health", tags=["System"])
+async def api_health_check(request: Request) -> dict[str, Any]:
+    """Provides a strict JSON health payload for external monitors (e.g., Zabbix).
+
+    Returns:
+        dict[str, Any]: System versioning and infrastructure heartbeat metrics.
+    """
+    arq_pool = getattr(request.app.state, "arq_pool", None)
+    workers_alive = 0
+
+    if arq_pool:
+        try:
+            # Query Redis for ARQ's ephemeral worker heartbeat keys
+            worker_keys = await arq_pool.keys("arq:worker:*")
+            workers_alive = len(worker_keys)
+        except Exception as e:
+            logger.error(f"Failed to ping Redis for worker heartbeat: {e}")
+
+    # Flag degraded if no workers are alive to process the queues
+    status_flag = "ok" if workers_alive > 0 else "degraded"
+
+    return {
+        "status": status_flag,
+        "service": settings.APP_NAME,
+        "version": getattr(version, "VERSION", "unknown"),
+        "workers_active": workers_alive,
+    }
