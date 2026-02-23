@@ -679,6 +679,58 @@ async def sync_jira_to_pf_task(ctx: dict[Any, Any], issue_key: str) -> None:
         await pf_client.close()
 
 
+async def zombie_recovery_task(ctx: dict[Any, Any]) -> dict[str, Any]:
+    """Sweeps Jira for recently closed tasks to catch missed webhooks.
+
+    Executes a reverse-vector JQL query to identify issues closed in the
+    last 24 hours and reconciles them against the local SyncState.
+    """
+    job_id = ctx.get("job_id", "unknown")
+    task_logger = logger.bind(job_id=job_id, operation="zombie_sweeper")
+    jira_client = JiraClient()
+
+    stats = {"found": 0, "recovered": 0, "errors": 0}
+
+    try:
+        # Target issues completed in the last 24 hours with the integration label
+        jql = "labels = PeopleForce AND statusCategory = Done AND updated >= -24h"
+        issues = await jira_client.search_issues(jql, fields=["status"])
+        stats["found"] = len(issues)
+
+        if not issues:
+            task_logger.debug("No recently closed Jira issues found. Sweeper yielding.")
+            return stats
+
+        for issue in issues:
+            issue_key = issue["key"]
+            try:
+                # Pre-flight DB evaluation to avoid acquiring the Redis lock unnecessarily.
+                # Actual idempotency is guaranteed by the delegate function.
+                async with async_session_maker() as session:
+                    stmt = select(SyncState).where(
+                        SyncState.jira_issue_key == issue_key, SyncState.is_completed.is_(False)
+                    )
+                    unresolved_state = (await session.exec(stmt)).first()
+
+                if unresolved_state:
+                    task_logger.info(f"Zombie detected: {issue_key}. Executing recovery delegate.")
+                    # Delegate to the existing webhook processor
+                    await sync_jira_to_pf_task(ctx, issue_key)
+                    stats["recovered"] += 1
+
+            except Exception as e:
+                task_logger.error(f"Failed to recover zombie {issue_key}: {e}")
+                stats["errors"] += 1
+
+    except Exception as err:
+        task_logger.exception("Catastrophic failure in zombie sweeper.")
+        raise Retry(defer=ctx.get("job_try", 1) * 300) from err
+    finally:
+        await jira_client.close()
+
+    return stats
+
+
 async def validate_routing_rules_task(ctx: dict[Any, Any]) -> dict[str, Any]:
     """Validates configured Jira targets and identities against the live Atlassian API.
 
@@ -878,7 +930,8 @@ class WorkerSettings:
         sync_pf_to_jira_task,
         sync_jira_to_pf_task,
         validate_routing_rules_task,
-        system_health_check_task,  # Register it here
+        system_health_check_task,
+        zombie_recovery_task,
     ]
     redis_settings: ClassVar[Any] = RedisSettings.from_dsn(settings.REDIS_URL)
     queue_name: ClassVar[str] = "pf_jira_queue"
@@ -889,6 +942,7 @@ class WorkerSettings:
     cron_jobs: ClassVar[list[Any]] = [
         cron(sync_pf_to_jira_task, minute=set(range(60))),
         cron(system_health_check_task, minute=set(range(60))),
+        cron(zombie_recovery_task, hour={3}, minute={0}),
     ]
 
     @staticmethod

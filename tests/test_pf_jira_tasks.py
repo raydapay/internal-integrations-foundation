@@ -8,7 +8,7 @@ from sqlalchemy.exc import OperationalError
 from sqlmodel import select
 
 from src.domain.pf_jira.models import SyncAuditLog, SyncOperation, SyncState
-from src.domain.pf_jira.tasks import _compute_hash, sync_jira_to_pf_task, sync_pf_to_jira_task
+from src.domain.pf_jira.tasks import _compute_hash, sync_jira_to_pf_task, sync_pf_to_jira_task, zombie_recovery_task
 from tests.base import BaseTest
 
 
@@ -242,6 +242,48 @@ class TestPfJiraTasks(BaseTest):
                 await sync_jira_to_pf_task(self.ctx, "HR-999")
 
             self.assertIn("5", str(context.exception))
+
+    @patch("src.domain.pf_jira.tasks.JiraClient", autospec=True)
+    @patch("src.domain.pf_jira.tasks.sync_jira_to_pf_task")
+    async def test_zombie_recovery_task_delegation(self, mock_sync_task: AsyncMock, mock_jira_class) -> None:
+        """Validates the JQL sweeper correctly identifies and delegates orphaned tasks."""
+        mock_jira_instance = mock_jira_class.return_value
+        mock_jira_instance.search_issues = AsyncMock(return_value=[{"key": "HR-1"}, {"key": "HR-2"}, {"key": "HR-3"}])
+        mock_jira_instance.close = AsyncMock()
+
+        # Seed DB: HR-1 is unresolved, HR-2 is already resolved, HR-3 doesn't exist locally.
+        async with self.test_session_maker() as session:
+            state_1 = SyncState(
+                pf_entity_type="task",
+                pf_entity_id="1",
+                jira_issue_key="HR-1",
+                jira_issue_id="101",
+                last_sync_hash="hash",
+                is_completed=False,
+            )
+            state_2 = SyncState(
+                pf_entity_type="task",
+                pf_entity_id="2",
+                jira_issue_key="HR-2",
+                jira_issue_id="102",
+                last_sync_hash="hash",
+                is_completed=True,
+            )
+            session.add_all([state_1, state_2])
+            await session.commit()
+
+        stats = await zombie_recovery_task(self.ctx)
+
+        self.assertEqual(stats["found"], 3)
+        self.assertEqual(stats["recovered"], 1)  # Only HR-1 should trigger recovery delegation
+        self.assertEqual(stats["errors"], 0)
+
+        mock_sync_task.assert_awaited_once_with(self.ctx, "HR-1")
+
+        # Verify the explicit JQL target
+        args, _ = mock_jira_instance.search_issues.call_args
+        self.assertIn("labels = PeopleForce", args[0])
+        self.assertIn("-24h", args[0])
 
 
 if __name__ == "__main__":

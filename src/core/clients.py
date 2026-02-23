@@ -403,3 +403,36 @@ class JiraClient(BaseClient):
         if response.status_code >= status.HTTP_400_BAD_REQUEST:
             logger.error(f"Failed to add comment to {issue_id_or_key}: {response.text}")
         response.raise_for_status()
+
+    async def search_issues(self, jql: str, fields: list[str] | None = None) -> list[dict[str, Any]]:
+        """Executes a JQL search and returns matching issues, handling pagination.
+
+        Args:
+            jql: The Jira Query Language string.
+            fields: A list of specific fields to return. Defaults to ["id", "key"].
+
+        Returns:
+            list[dict[str, Any]]: A list of Jira issue dictionaries.
+        """
+        fields = fields or ["id", "key"]
+        all_issues = []
+        start_at = 0
+        max_results = 100
+
+        while True:
+            payload = {"jql": jql, "startAt": start_at, "maxResults": max_results, "fields": fields}
+            response = await self.client.post("/rest/api/3/search", json=payload)
+
+            if response.status_code >= status.HTTP_400_BAD_REQUEST:
+                logger.error(f"JQL search failed [{response.status_code}]: {response.text}")
+            response.raise_for_status()
+
+            data = response.json()
+            issues = data.get("issues", [])
+            all_issues.extend(issues)
+
+            if start_at + len(issues) >= data.get("total", 0) or not issues:
+                break
+            start_at += len(issues)
+
+        return all_issues
