@@ -5,6 +5,7 @@ from fastapi import Request
 from fastapi.templating import Jinja2Templates
 
 from src.app.admin import audit_dashboard
+from src.app.schemas import AuditQueryParams
 from src.domain.pf_jira.models import SyncAuditLog, SyncOperation
 from tests.base import BaseTest
 
@@ -41,7 +42,9 @@ class TestAuditAPI(BaseTest):
         await self._seed_audit_logs(count=2)
 
         async with self.test_session_maker() as session:
-            await audit_dashboard(request=self.mock_request, query=None, page=1, session=session, user=self.mock_user)
+            # Explicitly define all values to prevent FastAPI default dependencies from bleeding in
+            params = AuditQueryParams(query=None, operation=None, page=1)
+            await audit_dashboard(request=self.mock_request, params=params, session=session, user=self.mock_user)
 
         mock_templates.TemplateResponse.assert_called_once()
         args, _ = mock_templates.TemplateResponse.call_args
@@ -59,9 +62,9 @@ class TestAuditAPI(BaseTest):
         await self._seed_audit_logs(count=51, search_term="HR-10")
 
         async with self.test_session_maker() as session:
-            await audit_dashboard(
-                request=self.mock_request, query="HR-10", page=1, session=session, user=self.mock_user
-            )
+            # Explicitly define all values
+            params = AuditQueryParams(query="HR-10", operation=None, page=1)
+            await audit_dashboard(request=self.mock_request, params=params, session=session, user=self.mock_user)
 
         mock_templates.TemplateResponse.assert_called_once()
         args, _ = mock_templates.TemplateResponse.call_args

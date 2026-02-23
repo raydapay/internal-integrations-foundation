@@ -1,7 +1,10 @@
 import unittest
-from unittest.mock import AsyncMock, patch
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+from arq.worker import Retry
+from sqlalchemy.exc import OperationalError
 from sqlmodel import select
 
 from src.domain.pf_jira.models import SyncAuditLog, SyncOperation, SyncState
@@ -182,6 +185,63 @@ class TestPfJiraTasks(BaseTest):
             ).first()
             self.assertIsNotNone(audit_log)
             self.assertEqual(audit_log.direction, "Jira ➡️ PF")
+
+    @patch("src.domain.pf_jira.tasks.notify")
+    @patch("src.domain.pf_jira.tasks.logger")
+    @patch("src.domain.pf_jira.tasks._process_single_task")
+    async def test_sync_pf_to_jira_task_wal_lock_contention(
+        self, mock_process_single_task: AsyncMock, mock_logger: MagicMock, mock_notify: AsyncMock
+    ) -> None:
+        """Verifies SQLite WAL concurrency constraints trigger ARQ task backoff.
+
+        Simulates a 'database is locked' OperationalError raised by SQLAlchemy when
+        another ARQ worker holds the SQLite write lock beyond the timeout threshold.
+
+        Args:
+            mock_process_single_task: Mocked internal processing to inject the DB exception.
+            mock_logger: Suppresses stdout exception tracebacks during the simulated crash.
+            mock_notify: Intercepts the Slack/Telegram alert dispatch.
+        """
+        # Simulate SQLite WAL lock contention
+        sqlite_error = OperationalError("statement", "params", orig=Exception("database is locked"))
+        mock_process_single_task.side_effect = sqlite_error
+
+        # We expect the worker to catch OperationalError and explicitly raise an arq.worker.Retry
+        with self.assertRaises(Retry) as context:
+            await sync_pf_to_jira_task(self.ctx)
+
+        # ARQ's Retry object representation contains the defer time (e.g., '<Retry defer 5.00s>')
+        self.assertIn("5", str(context.exception))
+
+        # Verify the system attempted to dispatch the catastrophic failure alert
+        mock_notify.assert_awaited_once()
+
+    @patch("src.domain.pf_jira.tasks.logger")
+    @patch("src.domain.pf_jira.tasks.JiraClient")
+    async def test_sync_jira_to_pf_task_wal_lock_contention(
+        self, mock_jira_class: AsyncMock, mock_logger: MagicMock
+    ) -> None:
+        """Verifies database lock contention handling on the reverse sync vector.
+
+        Args:
+            mock_jira_class: Mocked client to bypass external Atlassian calls.
+            mock_logger: Suppresses stdout exception tracebacks during the simulated crash.
+        """
+        # 1. Setup the session mock to raise the exception
+        mock_session = AsyncMock()
+        mock_session.exec.side_effect = OperationalError("statement", "params", orig=Exception("database is locked"))
+
+        # 2. Properly construct an async context manager for the session maker override
+        @asynccontextmanager
+        async def mock_maker():
+            yield mock_session
+
+        # 3. Inject the context manager and execute
+        with patch("src.domain.pf_jira.tasks.async_session_maker", return_value=mock_maker()):
+            with self.assertRaises(Retry) as context:
+                await sync_jira_to_pf_task(self.ctx, "HR-999")
+
+            self.assertIn("5", str(context.exception))
 
 
 if __name__ == "__main__":

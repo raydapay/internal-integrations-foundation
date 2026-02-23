@@ -10,3 +10,4 @@ data/
 dist/
 *.egg-info/
 project_full_context.md
+.coverage

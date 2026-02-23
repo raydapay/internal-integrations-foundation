@@ -11,6 +11,10 @@ class SyncRequest(BaseModel):
         default=None,
         description="Optional specific user email to sync. If omitted, performs a full delta-sync.",
     )
+    manual_trigger: bool = Field(
+        default=False,
+        description="Bypass interval checks and force immediate synchronization.",
+    )
 
 
 @router.post("/sync", status_code=status.HTTP_202_ACCEPTED)

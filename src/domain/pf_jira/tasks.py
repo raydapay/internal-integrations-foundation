@@ -1,5 +1,6 @@
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, ClassVar
 
@@ -14,6 +15,7 @@ from loguru import logger
 from redis.exceptions import LockError
 from sqlalchemy import Integer, cast, func
 from sqlmodel import SQLModel, select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from src.config.settings import settings
 from src.core.clients import JiraClient, PeopleForceClient
@@ -34,7 +36,467 @@ def _compute_hash(data: dict[str, Any]) -> str:
     return hashlib.sha256(serialized).hexdigest()
 
 
-async def sync_pf_to_jira_task(ctx: dict[Any, Any], payload: dict[str, Any] | None = None) -> dict[str, Any]:  # noqa: PLR0912 # noqa: PLR0915
+async def _evaluate_polling_state(
+    redis_client: redis.Redis, is_manual_trigger: bool
+) -> tuple[dict[str, str] | None, DomainConfig | None]:
+    """Evaluates the Tick/Yield infrastructure state for the polling loop.
+
+    Args:
+        redis_client: The active async Redis connection pool.
+        is_manual_trigger: Boolean flag indicating if the UI forced a delta-sync.
+
+    Returns:
+        tuple[dict[str, str] | None, DomainConfig | None]:
+            - If the worker should yield, returns the yield status payload and None.
+            - If the worker should proceed, returns None and the active DomainConfig.
+    """
+    async with async_session_maker() as session:
+        stmt = select(DomainConfig).where(DomainConfig.domain_name == "pf_jira")
+        config = (await session.exec(stmt)).first()
+
+    if not config:
+        logger.error("DomainConfig missing. Yielding execution.")
+        return {"status": "yield_missing_config"}, None
+
+    if not config.is_active and not is_manual_trigger:
+        logger.debug("Domain pf_jira is globally disabled. Yielding.")
+        return {"status": "yield_inactive"}, None
+
+    last_run_key = "pf_jira:last_sync_timestamp"
+    if not is_manual_trigger:
+        last_run_raw = await redis_client.get(last_run_key)
+        if last_run_raw:
+            last_run_time = float(last_run_raw)
+            now = datetime.now(UTC).timestamp()
+            if (now - last_run_time) < config.polling_interval_seconds:
+                # Polling interval not met yet, yield silently
+                return {"status": "yield_interval_not_met"}, None
+
+    # Register the execution time lock immediately to prevent concurrent ticks
+    await redis_client.set(last_run_key, datetime.now(UTC).timestamp())
+
+    return None, config
+
+
+async def _calculate_sync_watermark(session: AsyncSession) -> int:
+    """Determines the baseline PeopleForce task ID to establish a delta-polling boundary.
+
+    Args:
+        session: The active asynchronous database session.
+
+    Returns:
+        int: The lowest unresolved Task ID, falling back to the highest known ID, or 0.
+    """
+    stmt_min_open = select(func.min(cast(SyncState.pf_entity_id, Integer))).where(
+        SyncState.pf_entity_type == "task", SyncState.is_completed.is_(False)
+    )
+    watermark_id = (await session.exec(stmt_min_open)).first()
+
+    if watermark_id is None:
+        stmt_max_all = select(func.max(cast(SyncState.pf_entity_id, Integer))).where(SyncState.pf_entity_type == "task")
+        watermark_id = (await session.exec(stmt_max_all)).first()
+
+    return watermark_id or 0
+
+
+async def _resolve_identities_and_routing(
+    session: AsyncSession, jira_client: JiraClient, task: dict[str, Any]
+) -> dict[str, Any]:
+    """Evaluates routing rules and resolves Jira account identities via the Atlassian API.
+
+    Args:
+        session: The active asynchronous database session.
+        jira_client: The active Jira HTTP client.
+        task: The raw PeopleForce task payload.
+
+    Returns:
+        dict[str, Any]: Consolidated dictionary of routing targets, labels, and resolved Jira account IDs.
+    """
+    routing = await evaluate_routing_rules(session, task)
+
+    assignee_email = task.get("assigned_to", {}).get("email")
+
+    # Apply Firewall overrides or fallback to PF defaults
+    resolved_assignee_email = routing["assignee_email"] or assignee_email
+    resolved_reporter_email = routing["reporter_email"] or resolved_assignee_email
+
+    # Hit Atlassian API for exact account mappings
+    assignee_id = await jira_client.get_account_id_by_email(resolved_assignee_email)
+    reporter_id = await jira_client.get_account_id_by_email(resolved_reporter_email)
+
+    return {
+        "action": routing["action"],
+        "target_project": routing["project"],
+        "task_type": routing["task_type"],
+        "target_labels": ["PeopleForce"] + routing["labels"],
+        "assignee_id": assignee_id,
+        "reporter_id": reporter_id,
+        "resolved_assignee_email": resolved_assignee_email,
+        "resolved_reporter_email": resolved_reporter_email,
+    }
+
+
+def _build_jira_create_payload(
+    task: dict[str, Any], routing_data: dict[str, Any], config: DomainConfig, summary: str
+) -> dict[str, Any]:
+    """Constructs the Atlassian API JSON payload for creating a new Jira issue.
+
+    Args:
+        task: The raw PeopleForce task payload.
+        routing_data: The resolved firewall identities and target configurations.
+        config: The active domain configuration.
+        summary: The pre-computed Jira issue summary string.
+
+    Returns:
+        dict[str, Any]: The finalized JSON-serializable dictionary for issue creation.
+    """
+    task_id = str(task.get("id"))
+    starts_on = task.get("starts_on")
+    ends_on = task.get("ends_on")
+
+    payload = {
+        "fields": {
+            "project": {"key": routing_data["target_project"]},
+            "summary": summary,
+            "description": build_adf_description(task),
+            "issuetype": {"name": "Task"},
+            "labels": routing_data["target_labels"],
+        },
+        "properties": [{"key": "pf_sync_metadata", "value": {"pf_task_id": task_id}}],
+    }
+
+    if routing_data["assignee_id"]:
+        payload["fields"]["assignee"] = {"accountId": routing_data["assignee_id"]}
+    elif config.jira_fallback_account_id:
+        payload["fields"]["assignee"] = {"accountId": config.jira_fallback_account_id}
+
+    if routing_data["reporter_id"]:
+        payload["fields"]["reporter"] = {"accountId": routing_data["reporter_id"]}
+
+    if routing_data["task_type"] and config.jira_pf_task_id_custom_field:
+        payload["fields"][config.jira_pf_task_id_custom_field] = {"value": routing_data["task_type"]}
+
+    if ends_on:
+        payload["fields"]["duedate"] = ends_on
+    if starts_on:
+        payload["fields"][JIRA_CUSTOM_FIELD_START_DATE] = starts_on
+
+    return payload
+
+
+def _build_jira_update_payload(
+    task: dict[str, Any], routing_data: dict[str, Any], config: DomainConfig, summary: str
+) -> dict[str, Any]:
+    """Constructs the Atlassian API JSON payload for mutating an existing Jira issue.
+
+    Args:
+        task: The raw PeopleForce task payload.
+        routing_data: The resolved firewall identities and target configurations.
+        config: The active domain configuration.
+        summary: The pre-computed Jira issue summary string.
+
+    Returns:
+        dict[str, Any]: The finalized JSON-serializable dictionary for issue updating.
+    """
+    starts_on = task.get("starts_on")
+    ends_on = task.get("ends_on")
+
+    payload = {
+        "fields": {
+            "summary": summary,
+            "description": build_adf_description(task),
+            "labels": routing_data["target_labels"],
+        }
+    }
+
+    if routing_data["assignee_id"]:
+        payload["fields"]["assignee"] = {"accountId": routing_data["assignee_id"]}
+    else:
+        payload["fields"]["assignee"] = None  # Explicitly unassign if identity mapping fails on update
+
+    if routing_data["reporter_id"]:
+        payload["fields"]["reporter"] = {"accountId": routing_data["reporter_id"]}
+
+    if routing_data["task_type"] and config.jira_pf_task_id_custom_field:
+        payload["fields"][config.jira_pf_task_id_custom_field] = {"value": routing_data["task_type"]}
+
+    if not routing_data["assignee_id"] and config.jira_fallback_account_id:
+        payload["fields"]["assignee"] = {"accountId": config.jira_fallback_account_id}
+
+    if ends_on:
+        payload["fields"]["duedate"] = ends_on
+    if starts_on:
+        payload["fields"][JIRA_CUSTOM_FIELD_START_DATE] = starts_on
+
+    return payload
+
+
+async def _execute_safe_jira_update(
+    session: AsyncSession,
+    jira_client: JiraClient,
+    state_record: SyncState,
+    update_payload: dict[str, Any],
+) -> bool:
+    """Executes a Jira update and gracefully handles 404 Ghost Records.
+
+    Args:
+        session: The asynchronous database session.
+        jira_client: The initialized Jira API client.
+        state_record: The local synchronization state record.
+        update_payload: The computed Jira update payload.
+
+    Returns:
+        bool: True if the update succeeded, False if a 404 occurred and state was purged.
+
+    Raises:
+        httpx.HTTPStatusError: For any non-404 HTTP errors, triggering ARQ retries.
+    """
+    issue_key = state_record.jira_issue_key
+    task_id = state_record.pf_entity_id
+
+    try:
+        await jira_client.update_issue(issue_key, update_payload)
+        return True
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == status.HTTP_404_NOT_FOUND:
+            logger.warning(
+                f"Jira issue {issue_key} (PF Task {task_id}) was deleted externally (404). Purging local state."
+            )
+            await session.delete(state_record)
+            session.add(
+                SyncAuditLog(
+                    pf_task_id=task_id,
+                    jira_issue_key=issue_key,
+                    operation=SyncOperation.ERROR,
+                    details=json.dumps(
+                        {"error": "Jira 404 Not Found. Local state purged to force recreation next cycle."},
+                        ensure_ascii=False,
+                    ),
+                )
+            )
+            await session.commit()
+            return False
+        raise
+
+
+@dataclass
+class SyncContext:
+    """Encapsulates dependencies and state for single-task processing."""
+
+    session: AsyncSession
+    jira_client: JiraClient
+    redis_client: redis.Redis
+    config: DomainConfig
+    stats: dict[str, int]
+    cutoff_date: datetime | None
+    job_id: str
+
+
+@dataclass
+class TaskContext:
+    """Encapsulates the parsed state and pre-computed values of a single PeopleForce task."""
+
+    raw: dict[str, Any]
+    id: str
+    is_completed: bool
+    hash: str
+    summary: str
+
+
+def _is_task_historical(task: dict[str, Any], cutoff_date: datetime, task_id: str) -> bool:
+    """Evaluates whether a task falls outside the active synchronization window.
+
+    Args:
+        task: The raw PeopleForce task payload.
+        cutoff_date: The baseline datetime threshold.
+        task_id: The extracted Task ID for logging.
+
+    Returns:
+        bool: True if the task was created before the cutoff, False otherwise.
+    """
+    created_at_str = task.get("created_at")
+    if not created_at_str:
+        return False
+
+    try:
+        created_at = datetime.fromisoformat(created_at_str)
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=UTC)
+        return created_at < cutoff_date
+    except (ValueError, TypeError):
+        logger.warning(f"Failed to parse created_at '{created_at_str}' for PF Task {task_id}. Evaluating for sync.")
+        return False
+
+
+async def _handle_issue_creation(sync_ctx: SyncContext, task_ctx: TaskContext, routing_data: dict[str, Any]) -> None:
+    """Executes the complete lifecycle for generating a new Jira issue and recording state.
+
+    Args:
+        sync_ctx: Global synchronization dependencies and metrics.
+        task_ctx: Parsed context for the current PeopleForce task.
+        routing_data: Firewall and identity resolution outputs.
+    """
+    task_logger = logger.bind(pf_task_id=task_ctx.id, job_id=sync_ctx.job_id)
+
+    jira_payload = _build_jira_create_payload(task_ctx.raw, routing_data, sync_ctx.config, task_ctx.summary)
+    task_logger.debug(f"Computed Jira Payload: {json.dumps(jira_payload)}")
+
+    issue = await sync_ctx.jira_client.create_issue(jira_payload)
+    issue_key = issue["key"]
+
+    new_state = SyncState(
+        pf_entity_type="task",
+        pf_entity_id=task_ctx.id,
+        jira_issue_key=issue_key,
+        jira_issue_id=issue["id"],
+        last_sync_hash=task_ctx.hash,
+        is_completed=task_ctx.is_completed,
+    )
+    sync_ctx.session.add(new_state)
+
+    sync_ctx.session.add(
+        SyncAuditLog(
+            pf_task_id=task_ctx.id,
+            jira_issue_key=issue_key,
+            operation=SyncOperation.CREATE,
+            details=json.dumps(
+                {
+                    "project": routing_data["target_project"],
+                    "assignee_email_resolved": routing_data["resolved_assignee_email"],
+                    "reporter_email_resolved": routing_data["resolved_reporter_email"],
+                    "task_type": routing_data["task_type"],
+                    "labels": routing_data["target_labels"],
+                    "summary_injected": task_ctx.summary,
+                },
+                indent=2,
+                ensure_ascii=False,
+            ),
+        )
+    )
+    sync_ctx.stats["created"] += 1
+    task_logger.info(f"Created Jira issue {issue_key}")
+
+    if task_ctx.is_completed:
+        await sync_ctx.jira_client.transition_issue_to_done(issue_key)
+        await sync_ctx.jira_client.add_comment(
+            issue_key,
+            "This issue was automatically closed because the corresponding task was marked "
+            "as completed in PeopleForce.",
+        )
+        task_logger.info(f"Transitioned {issue_key} to Done upon creation.")
+
+
+async def _handle_issue_update(
+    sync_ctx: SyncContext, task_ctx: TaskContext, routing_data: dict[str, Any], state_record: SyncState
+) -> None:
+    """Executes the mutation lifecycle for an existing Jira issue, handling state reconciliation.
+
+    Args:
+        sync_ctx: Global synchronization dependencies and metrics.
+        task_ctx: Parsed context for the current PeopleForce task.
+        routing_data: Firewall and identity resolution outputs.
+        state_record: The previously tracked local database state.
+    """
+    task_logger = logger.bind(pf_task_id=task_ctx.id, job_id=sync_ctx.job_id)
+    issue_key = state_record.jira_issue_key
+
+    update_payload = _build_jira_update_payload(task_ctx.raw, routing_data, sync_ctx.config, task_ctx.summary)
+    task_logger.debug(f"Computed Update Payload: {json.dumps(update_payload)}")
+
+    update_success = await _execute_safe_jira_update(
+        sync_ctx.session, sync_ctx.jira_client, state_record, update_payload
+    )
+    if not update_success:
+        return  # State was purged (404), yield and let it recreate on next tick
+
+    if task_ctx.is_completed:
+        await sync_ctx.jira_client.transition_issue_to_done(issue_key)
+        task_logger.info(f"Transitioned {issue_key} to Done during update.")
+
+    state_record.last_sync_hash = task_ctx.hash
+    state_record.last_updated_at = datetime.utcnow()
+    state_record.is_completed = task_ctx.is_completed
+    sync_ctx.session.add(state_record)
+
+    sync_ctx.session.add(
+        SyncAuditLog(
+            pf_task_id=task_ctx.id,
+            jira_issue_key=issue_key,
+            operation=SyncOperation.UPDATE,
+            details=json.dumps(
+                {
+                    "assignee_email_resolved": routing_data["resolved_assignee_email"],
+                    "reporter_email_resolved": routing_data["resolved_reporter_email"],
+                    "task_type_resolved": routing_data["task_type"],
+                    "labels_resolved": routing_data["target_labels"],
+                    "completed_status_triggered": task_ctx.is_completed,
+                },
+                ensure_ascii=False,
+            ),
+        )
+    )
+    sync_ctx.stats["updated"] += 1
+    task_logger.info(f"Updated Jira issue {issue_key}")
+
+
+async def _process_single_task(task: dict[str, Any], ctx: SyncContext) -> None:
+    """Evaluates and synchronizes a single PeopleForce task against the Jira state matrix.
+
+    Args:
+        task: The raw dictionary payload from the PeopleForce API.
+        ctx: The global synchronization context object.
+    """
+    task_id = str(task.get("id"))
+    task_logger = logger.bind(pf_task_id=task_id, job_id=ctx.job_id)
+
+    if ctx.cutoff_date and _is_task_historical(task, ctx.cutoff_date, task_id):
+        ctx.stats["skipped"] += 1
+        return
+
+    # Extract Base Task Context
+    raw_title = task.get("title", f"Task {task_id}")
+    assoc_name = task.get("associated_to", {}).get("full_name")
+
+    task_ctx = TaskContext(
+        raw=task,
+        id=task_id,
+        is_completed=task.get("completed", False),
+        hash=_compute_hash(task),
+        summary=f"[PF] {raw_title} - {assoc_name}" if assoc_name else f"[PF] {raw_title}",
+    )
+
+    lock_key = f"lock:pf_jira:task:{task_id}"
+
+    try:
+        async with ctx.redis_client.lock(lock_key, timeout=10.0, blocking_timeout=2.0):
+            statement = select(SyncState).where(SyncState.pf_entity_type == "task", SyncState.pf_entity_id == task_id)
+            state_record = (await ctx.session.exec(statement)).first()
+
+            routing_data = await _resolve_identities_and_routing(ctx.session, ctx.jira_client, task)
+
+            if routing_data["action"] == RoutingAction.DROP:
+                task_logger.debug(f"Task {task_id} dropped by firewall routing rule.")
+                ctx.stats["skipped"] += 1
+                return
+
+            if not state_record:
+                await _handle_issue_creation(ctx, task_ctx, routing_data)
+            elif state_record.last_sync_hash != task_ctx.hash:
+                await _handle_issue_update(ctx, task_ctx, routing_data, state_record)
+            else:
+                ctx.stats["skipped"] += 1
+                task_logger.debug(
+                    f"Skipped (No Delta): Payload hash {task_ctx.hash} exactly matches "
+                    "the state stored in the database."
+                )
+
+            await ctx.session.commit()
+
+    except LockError:
+        task_logger.warning("Task locked by concurrent worker process. Yielding.")
+
+
+async def sync_pf_to_jira_task(ctx: dict[Any, Any], payload: dict[str, Any] | None = None) -> dict[str, Any]:
     """Polls PeopleForce tasks, computes state deltas, and synchronizes mutations to Jira.
 
     Implements a Tick/Yield pattern driven by DomainConfig to allow runtime mutability
@@ -45,301 +507,39 @@ async def sync_pf_to_jira_task(ctx: dict[Any, Any], payload: dict[str, Any] | No
     redis_client = ctx["redis"]
     is_manual_trigger = payload.get("manual_trigger", False)
 
-    # --- Tick/Yield Gateway ---
-    async with async_session_maker() as session:
-        stmt = select(DomainConfig).where(DomainConfig.domain_name == "pf_jira")
-        config = (await session.exec(stmt)).first()
-
-    if not config:
-        logger.error("DomainConfig missing. Yielding execution.")
-        return {"status": "yield_missing_config"}
-
-    if not config.is_active and not is_manual_trigger:
-        logger.debug("Domain pf_jira is globally disabled. Yielding.")
-        return {"status": "yield_inactive"}
-
-    last_run_key = "pf_jira:last_sync_timestamp"
-    if not is_manual_trigger:
-        last_run_raw = await redis_client.get(last_run_key)
-        if last_run_raw:
-            last_run_time = float(last_run_raw)
-            now = datetime.now(UTC).timestamp()
-            if (now - last_run_time) < config.polling_interval_seconds:
-                # Polling interval not met yet, yield silently
-                return {"status": "yield_interval_not_met"}
-
-    # Register the execution time lock immediately to prevent concurrent ticks
-    await redis_client.set(last_run_key, datetime.now(UTC).timestamp())
+    # 1. Tick/Yield Pre-Flight Evaluation
+    yield_status, config = await _evaluate_polling_state(redis_client, is_manual_trigger)
+    if yield_status or not config:
+        return yield_status or {"status": "yield_error"}
 
     # --- Core Execution Begins ---
     pf_client = PeopleForceClient()
     jira_client = JiraClient()
-
     stats = {"created": 0, "updated": 0, "skipped": 0, "status": "executed"}
 
     cutoff_date = settings.PF_SYNC_CREATED_AFTER
     if cutoff_date and cutoff_date.tzinfo is None:
         cutoff_date = cutoff_date.replace(tzinfo=UTC)
 
+    # Encapsulate loop dependencies
+    sync_ctx = SyncContext(
+        session=None,  # Assigned inside the active context block
+        jira_client=jira_client,
+        redis_client=redis_client,
+        config=config,
+        stats=stats,
+        cutoff_date=cutoff_date,
+        job_id=job_id,
+    )
+
     try:
         async with async_session_maker() as session:
-            # --- Watermark Calculation ---
-            stmt_min_open = select(func.min(cast(SyncState.pf_entity_id, Integer))).where(
-                SyncState.pf_entity_type == "task", SyncState.is_completed.is_(False)
-            )
-            watermark_id = (await session.exec(stmt_min_open)).first()
-
-            if watermark_id is None:
-                stmt_max_all = select(func.max(cast(SyncState.pf_entity_id, Integer))).where(
-                    SyncState.pf_entity_type == "task"
-                )
-                watermark_id = (await session.exec(stmt_max_all)).first()
-
-            watermark_id = watermark_id or 0
-
+            sync_ctx.session = session
+            watermark_id = await _calculate_sync_watermark(session)
             tasks = await pf_client.get_tasks(watermark_id=watermark_id)
+
             for task in tasks:
-                task_id = str(task.get("id"))
-                is_completed = task.get("completed", False)
-                task_logger = logger.bind(pf_task_id=task_id, job_id=job_id)
-
-                # --- Historical Task Filtering ---
-                if cutoff_date:
-                    created_at_str = task.get("created_at")
-                    if created_at_str:
-                        try:
-                            created_at = datetime.fromisoformat(created_at_str)
-                            if created_at.tzinfo is None:
-                                created_at = created_at.replace(tzinfo=UTC)
-
-                            if created_at < cutoff_date:
-                                stats["skipped"] += 1
-                                continue
-                        except (ValueError, TypeError):
-                            logger.warning(
-                                f"Failed to parse created_at '{created_at_str}' for PF Task {task_id}. "
-                                "Evaluating for sync."
-                            )
-
-                # --- Core Reconciliation Logic ---
-                current_hash = _compute_hash(task)
-                lock_key = f"lock:pf_jira:task:{task_id}"
-
-                try:
-                    async with redis_client.lock(lock_key, timeout=10.0, blocking_timeout=2.0):
-                        statement = select(SyncState).where(
-                            SyncState.pf_entity_type == "task", SyncState.pf_entity_id == task_id
-                        )
-                        state_record = (await session.exec(statement)).first()
-
-                        # 1. Extract Base Fields
-                        raw_title = task.get("title", f"Task {task_id}")
-                        assoc_name = task.get("associated_to", {}).get("full_name")
-                        summary = f"[PF] {raw_title} - {assoc_name}" if assoc_name else f"[PF] {raw_title}"
-
-                        assignee_email = task.get("assigned_to", {}).get("email")
-                        starts_on = task.get("starts_on")
-                        ends_on = task.get("ends_on")
-
-                        # 2. Evaluate Firewall Routing Matrix
-                        routing = await evaluate_routing_rules(session, task)
-
-                        # --- FIREWALL DENY ACTION ---
-                        if routing["action"] == RoutingAction.DROP:
-                            task_logger.debug(f"Task {task_id} dropped by firewall routing rule.")
-                            stats["skipped"] += 1
-                            continue
-
-                        target_project = routing["project"]
-                        task_type = routing["task_type"]
-                        target_labels = ["PeopleForce"] + routing["labels"]
-
-                        # --- IDENTITY RESOLUTION & OVERRIDES ---
-                        resolved_assignee_email = routing["assignee_email"] or assignee_email
-                        resolved_reporter_email = routing["reporter_email"] or resolved_assignee_email
-
-                        assignee_id = await jira_client.get_account_id_by_email(resolved_assignee_email)
-                        reporter_id = await jira_client.get_account_id_by_email(resolved_reporter_email)
-
-                        if not state_record:
-                            # --- CREATION ROUTINE ---
-                            jira_payload = {
-                                "fields": {
-                                    "project": {"key": target_project},
-                                    "summary": summary,
-                                    "description": build_adf_description(task),
-                                    "issuetype": {"name": "Task"},
-                                    "labels": target_labels,
-                                },
-                                "properties": [{"key": "pf_sync_metadata", "value": {"pf_task_id": task_id}}],
-                            }
-
-                            # DYNAMIC ASSIGNEE FALLBACK
-                            if assignee_id:
-                                jira_payload["fields"]["assignee"] = {"accountId": assignee_id}
-                            elif config.jira_fallback_account_id:
-                                jira_payload["fields"]["assignee"] = {"accountId": config.jira_fallback_account_id}
-
-                            # DYNAMIC TASK TYPE FIELD
-                            if task_type and config.jira_pf_task_id_custom_field:
-                                jira_payload["fields"][config.jira_pf_task_id_custom_field] = {"value": task_type}
-                            if reporter_id:
-                                jira_payload["fields"]["reporter"] = {"accountId": reporter_id}
-
-                            if task_type:
-                                # Use the dynamic field ID from config
-                                jira_payload["fields"][config.jira_pf_task_id_custom_field] = {"value": task_type}
-                            if ends_on:
-                                jira_payload["fields"]["duedate"] = ends_on
-                            if starts_on:
-                                jira_payload["fields"][JIRA_CUSTOM_FIELD_START_DATE] = starts_on
-
-                            task_logger.debug(f"Computed Jira Payload: {json.dumps(jira_payload)}")
-                            issue = await jira_client.create_issue(jira_payload)
-                            issue_key = issue["key"]
-
-                            new_state = SyncState(
-                                pf_entity_type="task",
-                                pf_entity_id=task_id,
-                                jira_issue_key=issue_key,
-                                jira_issue_id=issue["id"],
-                                last_sync_hash=current_hash,
-                                is_completed=is_completed,
-                            )
-                            session.add(new_state)
-
-                            session.add(
-                                SyncAuditLog(
-                                    pf_task_id=task_id,
-                                    jira_issue_key=issue_key,
-                                    operation=SyncOperation.CREATE,
-                                    details=json.dumps(
-                                        {
-                                            "project": target_project,
-                                            "assignee_email_resolved": resolved_assignee_email,
-                                            "reporter_email_resolved": resolved_reporter_email,
-                                            "task_type": task_type,
-                                            "labels": target_labels,
-                                            "summary_injected": summary,
-                                        },
-                                        indent=2,
-                                        ensure_ascii=False,
-                                    ),
-                                )
-                            )
-                            stats["created"] += 1
-                            task_logger.info(f"Created Jira issue {issue_key}")
-
-                            if is_completed:
-                                await jira_client.transition_issue_to_done(issue_key)
-                                await jira_client.add_comment(
-                                    issue_key,
-                                    "This issue was automatically closed because the corresponding task was marked "
-                                    "as completed in PeopleForce.",
-                                )
-                                task_logger.info(f"Transitioned {issue_key} to Done upon creation.")
-
-                        elif state_record.last_sync_hash != current_hash:
-                            # --- MUTATION ROUTINE ---
-                            issue_key = state_record.jira_issue_key
-
-                            update_payload = {
-                                "fields": {
-                                    "summary": summary,
-                                    "description": build_adf_description(task),
-                                    "labels": target_labels,
-                                }
-                            }
-
-                            if assignee_id:
-                                update_payload["fields"]["assignee"] = {"accountId": assignee_id}
-                            else:
-                                update_payload["fields"]["assignee"] = None
-
-                            if reporter_id:
-                                update_payload["fields"]["reporter"] = {"accountId": reporter_id}
-
-                            if task_type and config.jira_pf_task_id_custom_field:
-                                update_payload["fields"][config.jira_pf_task_id_custom_field] = {"value": task_type}
-
-                            # Ensure fallback is applied on update if the original assignee is gone
-                            if not assignee_id and config.jira_fallback_account_id:
-                                update_payload["fields"]["assignee"] = {"accountId": config.jira_fallback_account_id}
-                            if ends_on:
-                                update_payload["fields"]["duedate"] = ends_on
-                            if starts_on:
-                                update_payload["fields"][JIRA_CUSTOM_FIELD_START_DATE] = starts_on
-
-                            task_logger.debug(f"Computed Update Payload: {json.dumps(update_payload)}")
-
-                            # --- Self-Healing 404 Intercept ---
-                            try:
-                                await jira_client.update_issue(issue_key, update_payload)
-                            except httpx.HTTPStatusError as e:
-                                if e.response.status_code == status.HTTP_404_NOT_FOUND:
-                                    task_logger.warning(
-                                        f"Jira issue {issue_key} was deleted externally (404). Purging local state."
-                                    )
-                                    await session.delete(state_record)
-                                    session.add(
-                                        SyncAuditLog(
-                                            pf_task_id=task_id,
-                                            jira_issue_key=issue_key,
-                                            operation=SyncOperation.ERROR,
-                                            details=json.dumps(
-                                                {
-                                                    "error": "Jira 404 Not Found. Local state purged to force "
-                                                    "recreation next cycle."
-                                                },
-                                                ensure_ascii=False,
-                                            ),
-                                        )
-                                    )
-                                    await session.commit()
-                                    continue
-                                raise
-
-                            if is_completed:
-                                await jira_client.transition_issue_to_done(issue_key)
-                                task_logger.info(f"Transitioned {issue_key} to Done during update.")
-
-                            state_record.last_sync_hash = current_hash
-                            state_record.last_updated_at = datetime.utcnow()
-                            state_record.is_completed = is_completed
-                            session.add(state_record)
-
-                            session.add(
-                                SyncAuditLog(
-                                    pf_task_id=task_id,
-                                    jira_issue_key=issue_key,
-                                    operation=SyncOperation.UPDATE,
-                                    details=json.dumps(
-                                        {
-                                            "assignee_email_resolved": resolved_assignee_email,
-                                            "reporter_email_resolved": resolved_reporter_email,
-                                            "task_type_resolved": task_type,
-                                            "labels_resolved": target_labels,
-                                            "completed_status_triggered": is_completed,
-                                        },
-                                        ensure_ascii=False,
-                                    ),
-                                )
-                            )
-                            stats["updated"] += 1
-                            task_logger.info(f"Updated Jira issue {issue_key}")
-
-                        else:
-                            stats["skipped"] += 1
-                            task_logger.debug(
-                                f"Skipped (No Delta): Payload hash {current_hash} exactly matches "
-                                "the state stored in the database."
-                            )
-
-                        await session.commit()
-
-                except LockError:
-                    task_logger.warning("Task locked by concurrent worker process. Yielding.")
-                    continue
+                await _process_single_task(task, sync_ctx)
 
     except Exception as err:
         logger.exception("Catastrophic failure in state reconciliation loop.")

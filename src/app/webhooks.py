@@ -44,5 +44,6 @@ async def jira_webhook_ingress(
                 logger.info(f"Enqueued Return Vector for {issue_key} (Job ID: {job.job_id})")
             else:
                 logger.error(f"Redis rejected job enqueue for {issue_key}.")
+                raise HTTPException(status_code=500, detail="Failed to enqueue job.")
 
     return {"status": "accepted"}

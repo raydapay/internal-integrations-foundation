@@ -109,6 +109,40 @@ class TestJiraWebhookIngress(unittest.IsolatedAsyncioTestCase):
         # ARQ worker should not be triggered for non-terminal states
         self.mock_pool.enqueue_job.assert_not_called()
 
+    @patch("src.core.security.settings")
+    def test_jira_webhook_arq_pool_missing_returns_500(self, mock_settings: AsyncMock) -> None:
+        """Verifies the webhook endpoint fails closed if the ARQ pool is detached from app state."""
+        mock_settings.JIRA_WEBHOOK_SECRET = self.secret
+        headers = {"X-Hub-Signature": self._generate_signature(self.secret, self.raw_payload)}
+
+        original_pool = getattr(self.client.app.state, "arq_pool", None)
+        self.client.app.state.arq_pool = None
+
+        try:
+            response = self.client.post("/api/v1/webhooks/jira", content=self.raw_payload, headers=headers)
+            self.assertEqual(response.status_code, 500)
+            self.assertIn("Queue unavailable", response.json()["detail"])
+        finally:
+            self.client.app.state.arq_pool = original_pool
+
+    @patch("src.core.security.settings")
+    def test_jira_webhook_enqueue_failure_returns_500(self, mock_settings: AsyncMock) -> None:
+        """Verifies the webhook endpoint handles broker rejection and prevents silent drops."""
+        mock_settings.JIRA_WEBHOOK_SECRET = self.secret
+        headers = {"X-Hub-Signature": self._generate_signature(self.secret, self.raw_payload)}
+
+        original_pool = getattr(self.client.app.state, "arq_pool", None)
+        mock_pool = AsyncMock()
+        mock_pool.enqueue_job.return_value = None
+        self.client.app.state.arq_pool = mock_pool
+
+        try:
+            response = self.client.post("/api/v1/webhooks/jira", content=self.raw_payload, headers=headers)
+            self.assertEqual(response.status_code, 500)
+            self.assertIn("Failed to enqueue", response.json()["detail"])
+        finally:
+            self.client.app.state.arq_pool = original_pool
+
 
 if __name__ == "__main__":
     unittest.main()
