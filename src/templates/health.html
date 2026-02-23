@@ -10,6 +10,7 @@
                     <tr><th>Memory Usage</th><td>{{ hardware.mem_percent }}% ({{ hardware.mem_used_gb }} / {{ hardware.mem_total_gb }} GB)</td></tr>
                     <tr><th>OS Uptime</th><td>{{ hardware.uptime }}</td></tr>
                     <tr><th>Core Temp</th><td>{{ hardware.temps }}</td></tr>
+                    <tr><th>Disk Free</th><td>{{ hardware.disk_free_gb }} / {{ hardware.disk_total_gb }} GB</td></tr>
                 </tbody>
             </table>
         </div>
@@ -39,6 +40,24 @@
                         </td>
                     </tr>
                     <tr><th>PF-Jira Queue Depth</th><td>{{ queue_depth }} jobs</td></tr>
+                    <tr>
+                        <th>Slack Webhook</th>
+                        <td>
+                            <span class="tag is-{{ integrations.slack.status_tag }}">
+                                {{ 'OK' if integrations.slack.status_tag == 'success' else integrations.slack.status_tag | upper }}
+                            </span>
+                            <div class="is-size-7 mt-1 has-text-grey">{{ integrations.slack.detail }}</div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>Telegram Bot</th>
+                        <td>
+                            <span class="tag is-{{ integrations.telegram.status_tag }}">
+                                {{ 'OK' if integrations.telegram.status_tag == 'success' else integrations.telegram.status_tag | upper }}
+                            </span>
+                            <div class="is-size-7 mt-1 has-text-grey">{{ integrations.telegram.detail }}</div>
+                        </td>
+                    </tr>
                 </tbody>
             </table>
         </div>

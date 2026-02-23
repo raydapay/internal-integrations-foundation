@@ -19,7 +19,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from src.app.schemas import AuditQueryParams, RoutingRuleForm, UserAccessForm, UserProvisionForm
 from src.config.settings import settings
 from src.core.broadcaster import log_broadcaster
-from src.core.clients import JiraClient, PeopleForceClient
+from src.core.clients import JiraClient, NotificationClient, PeopleForceClient
 from src.core.database import get_session
 from src.domain.pf_jira.models import DomainConfig, RoutingRule, SyncAuditLog
 from src.domain.users.models import User, UserRole
@@ -118,6 +118,7 @@ async def system_health(request: Request, user: dict[str, Any] = Depends(get_cur
     mem = psutil.virtual_memory()
     uptime_seconds = time.time() - psutil.boot_time()
     uptime_str = f"{int(uptime_seconds // 3600)}h {int((uptime_seconds % 3600) // 60)}m"
+    disk = psutil.disk_usage("/")
 
     # Handle OS-specific temperature limitations gracefully
     temps = "N/A (Windows/Unsupported)"
@@ -136,6 +137,8 @@ async def system_health(request: Request, user: dict[str, Any] = Depends(get_cur
         "mem_total_gb": round(mem.total / (1024**3), 2),
         "uptime": uptime_str,
         "temps": temps,
+        "disk_free_gb": round(disk.free / (1024**3), 2),
+        "disk_total_gb": round(disk.total / (1024**3), 2),
     }
 
     # 2. Infrastructure (ARQ Queue & Workers)
@@ -158,16 +161,20 @@ async def system_health(request: Request, user: dict[str, Any] = Depends(get_cur
     # 3. Integration Pings (Concurrent execution)
     pf_client = PeopleForceClient()
     jira_client = JiraClient()
+    notify_client = NotificationClient()
 
     try:
-        pf_res, jira_res = await asyncio.gather(pf_client.ping(), jira_client.ping())
+        pf_res, jira_res, slack_res, tg_res = await asyncio.gather(
+            pf_client.ping(), jira_client.ping(), notify_client.ping_slack(), notify_client.ping_telegram()
+        )
     finally:
-        await pf_client.close()
-        await jira_client.close()
+        await asyncio.gather(pf_client.close(), jira_client.close(), notify_client.close())
 
     integrations = {
         "peopleforce": {"status": "OK" if pf_res[0] else "ERROR", "detail": pf_res[1]},
         "jira": {"status": "OK" if jira_res[0] else "ERROR", "detail": jira_res[1]},
+        "slack": {"status_tag": slack_res[0], "detail": slack_res[1]},
+        "telegram": {"status_tag": tg_res[0], "detail": tg_res[1]},
     }
 
     return templates.TemplateResponse(
@@ -400,7 +407,7 @@ async def edit_routing_rule_modal(
     """Fetches a specific routing rule and returns the HTML modal for editing."""
     rule = await session.get(RoutingRule, rule_id)
     if not rule:
-        raise HTTPException(status_code=404, detail="Routing rule not found.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Routing rule not found.")
 
     # Fetch config to get the field_id
     config = (await session.exec(select(DomainConfig).where(DomainConfig.domain_name == "pf_jira"))).first()
@@ -587,7 +594,7 @@ async def pre_provision_user(
     session.add(new_user)
     await session.commit()
 
-    response = Response(status_code=200)
+    response = Response(status_code=status.HTTP_200_OK)
     response.headers["HX-Refresh"] = "true"
     return response
 
@@ -602,11 +609,11 @@ async def delete_user(
     target_user = await session.get(User, target_id)
 
     if not target_user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     # Safeguard: Prevent self-deletion
     if target_user.id == user.get("id"):
-        raise HTTPException(status_code=400, detail="Cannot delete your own active session.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot delete your own active session.")
 
     await session.delete(target_user)
     await session.commit()

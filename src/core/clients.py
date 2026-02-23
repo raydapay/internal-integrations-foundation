@@ -24,6 +24,59 @@ class BaseClient:
         await self.client.aclose()
 
 
+class NotificationClient(BaseClient):
+    """Adapter for verifying notification channel integrity."""
+
+    def __init__(self) -> None:
+        # Initialized with a dummy base to satisfy BaseClient;
+        # actual calls use absolute URLs from settings.
+        super().__init__("https://api.telegram.org")
+
+    async def ping_slack(self) -> tuple[str, str]:
+        """Checks Slack Webhook connectivity via a empty POST request.
+
+        Returns:
+            tuple[str, str]: (status_tag, detail_message)
+        """
+        if not settings.SLACK_WEBHOOK_URL:
+            return "warning", "Token not configured"
+
+        try:
+            # We use a POST with an empty body.
+            # A valid webhook returns 400 "invalid_payload" or "no_text".
+            # An invalid webhook returns 403 or 404.
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.post(settings.SLACK_WEBHOOK_URL, json={})
+
+                # 200 is theoretically possible if Slack changes behavior,
+                # 400 is the expected response for an empty payload on a valid webhook.
+                if resp.status_code in [200, 400]:
+                    return "success", "Webhook Valid"
+
+                if resp.status_code in [403, 404]:
+                    return "danger", "Invalid/Revoked Webhook"
+
+                return "danger", f"HTTP {resp.status_code}"
+        except Exception as e:
+            return "danger", f"Connection Failed: {e!s}"
+
+    async def ping_telegram(self) -> tuple[str, str]:
+        """Checks Telegram Bot Token via getMe endpoint."""
+        if not settings.TELEGRAM_BOT_TOKEN:
+            return "warning", "Token not configured"
+
+        url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/getMe"
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(url)
+                if resp.status_code == status.HTTP_200_OK:
+                    data = resp.json()
+                    return "success", f"Bot: @{data['result']['username']}"
+                return "danger", f"Invalid Token (HTTP {resp.status_code})"
+        except Exception as e:
+            return "danger", str(e)
+
+
 class PeopleForceClient(BaseClient):
     """Adapter for the PeopleForce HRIS API v3."""
 

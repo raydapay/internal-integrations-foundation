@@ -1,3 +1,4 @@
+import asyncio
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -19,6 +20,7 @@ from src.app.admin import router as admin_router
 from src.app.webhooks import router as webhook_router
 from src.config.settings import settings
 from src.core.broadcaster import configure_sse_logger
+from src.core.clients import NotificationClient
 from src.core.database import engine
 from src.core.logger import configure_logging
 from src.domain.pf_jira.router import router as pf_jira_router
@@ -181,9 +183,27 @@ async def api_health_check(request: Request) -> dict[str, Any]:
     # Flag degraded if no workers are alive to process the queues
     status_flag = "ok" if workers_alive > 0 else "degraded"
 
+    notify_client = NotificationClient()
+    try:
+        slack_res, tg_res = await asyncio.gather(notify_client.ping_slack(), notify_client.ping_telegram())
+    except Exception as e:
+        logger.error(f"Health check external ping failed catastrophically: {e}")
+        slack_res = ("danger", "Ping execution failed")
+        tg_res = ("danger", "Ping execution failed")
+    finally:
+        await notify_client.close()
+
+    # Optional: If both notification channels are dead, the system cannot alert humans.
+    if slack_res[0] == "danger" and tg_res[0] == "danger":
+        status_flag = "degraded"
+
     return {
         "status": status_flag,
         "service": settings.APP_NAME,
         "version": getattr(version, "VERSION", "unknown"),
         "workers_active": workers_alive,
+        "integrations": {
+            "slack": {"status": "ok" if slack_res[0] == "success" else slack_res[0], "detail": slack_res[1]},
+            "telegram": {"status": "ok" if tg_res[0] == "success" else tg_res[0], "detail": tg_res[1]},
+        },
     }
