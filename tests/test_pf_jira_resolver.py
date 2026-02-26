@@ -166,6 +166,57 @@ class TestFieldDataResolver(unittest.IsolatedAsyncioTestCase):
                     f"Resolver failed to safely format date input: '{input_val}'",
                 )
 
+    def test_format_doc(self) -> None:
+        """Verifies Atlassian Document Format (ADF) generation."""
+        # Standard multiline string
+        res = self.resolver._format_doc("Line 1\nLine 2")
+        self.assertEqual(res["type"], "doc")
+        self.assertEqual(len(res["content"]), 2)
+        self.assertEqual(res["content"][0]["content"][0]["text"], "Line 1")
+        self.assertEqual(res["content"][1]["content"][0]["text"], "Line 2")
+
+        # None/Null coercion
+        res_none = self.resolver._format_doc(None)
+        self.assertEqual(len(res_none["content"]), 1)
+        self.assertEqual(res_none["content"][0]["content"], [])
+
+    def test_format_date(self) -> None:
+        """Verifies date field strict null-coercion."""
+        self.assertIsNone(self.resolver._format_date(None))
+        self.assertIsNone(self.resolver._format_date("None"))
+        self.assertIsNone(self.resolver._format_date("null"))
+        self.assertIsNone(self.resolver._format_date("  "))
+        self.assertEqual(self.resolver._format_date(" 2026-02-26 "), "2026-02-26")
+
+    def test_format_array(self) -> None:
+        """Verifies array casting from strings and lists."""
+        self.assertEqual(self.resolver._format_array("pf, onboarding"), ["pf", "onboarding"])
+        self.assertEqual(self.resolver._format_array([1, 2, 3]), ["1", "2", "3"])
+        # Should return raw object if it doesn't match expected types
+        self.assertEqual(self.resolver._format_array({"key": "val"}), {"key": "val"})
+
+    async def test_format_user(self) -> None:
+        """Verifies identity resolution delegation."""
+        self.resolver._resolve_account_id = AsyncMock(return_value="acc-123")
+
+        self.assertIsNone(await self.resolver._format_user(None))
+        self.assertIsNone(await self.resolver._format_user("   "))
+
+        self.assertEqual(await self.resolver._format_user("ray@todapay.com"), {"id": "acc-123"})
+        self.resolver._resolve_account_id.assert_called_once_with("ray@todapay.com")
+
+    def test_validate_allowed_values_isolation(self) -> None:
+        """Verifies Jira domain constraint validation."""
+        schema = {"allowedValues": [{"id": "1001", "value": "Engineering"}, {"id": "1002", "value": "HR"}]}
+
+        # Should not raise (Valid ID and Valid String)
+        self.resolver._validate_allowed_values("1001", schema, "customfield_1")
+        self.resolver._validate_allowed_values("HR", schema, "customfield_1")
+
+        # Should raise SchemaValidationError
+        with self.assertRaises(SchemaValidationError):
+            self.resolver._validate_allowed_values("Marketing", schema, "customfield_1")
+
 
 if __name__ == "__main__":
     unittest.main()

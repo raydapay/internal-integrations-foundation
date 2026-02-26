@@ -256,12 +256,15 @@ class FieldDataResolver:
 
     async def _format_user(self, value: Any) -> dict[str, str] | None:
         """Resolves an email or ID string into a Jira Account ID object."""
-        if not value:
+        # Normalize and check for empty/null values before calling the API
+        safe_val = str(value).strip() if value is not None else ""
+        if not safe_val or safe_val.lower() in ("none", "null"):
             return None
-        account_id = await self._resolve_account_id(str(value).strip())
+
+        account_id = await self._resolve_account_id(safe_val)
         return {"id": account_id} if account_id else None
 
-    def _format_array(self, value: Any) -> Any:
+    def _format_array(self, value: Any) -> list[str] | Any:
         """Parses comma-separated strings or lists into an array of strings."""
         if isinstance(value, str):
             return [v.strip() for v in value.split(",")]
