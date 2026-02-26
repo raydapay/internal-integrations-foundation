@@ -77,3 +77,39 @@ class TestFieldDataResolver(unittest.IsolatedAsyncioTestCase):
         # No mapping is provided for 'customfield_strict', should throw SchemaValidationError
         with self.assertRaises(SchemaValidationError):
             await self.resolver.build_payload(self.rule, self.pf_payload)
+
+
+async def test_allowed_values_mismatch(self) -> None:
+    """Verifies the validator catches when a mapping uses an option Jira no longer recognizes."""
+    # Inject a restricted select-list into the mocked createmeta
+    self.createmeta_response["customfield_10045"] = {
+        "fieldId": "customfield_10045",
+        "required": False,
+        "schema": {"type": "option"},
+        "allowedValues": [{"id": "10001", "value": "Engineering"}, {"id": "10002", "value": "Human Resources"}],
+    }
+    self.mock_redis.get.return_value = json.dumps(self.createmeta_response)
+
+    # FIX: Provide a synchronous MagicMock for the assignee lookup to prevent coroutine subscript errors
+    mock_user_resp = MagicMock()
+    mock_user_resp.json.return_value = [{"accountId": "12345-abcde"}]
+    mock_user_resp.raise_for_status.return_value = None
+    self.mock_jira.client.get.return_value = mock_user_resp
+
+    # Map a deprecated/invalid static value to the restricted field
+    self.rule.field_mappings.append(
+        RuleFieldMapping(
+            jira_field_id="customfield_10045",
+            source_type=MappingSourceType.STATIC,
+            source_value="Marketing",  # Does not exist in allowedValues
+        )
+    )
+
+    with self.assertRaises(SchemaValidationError) as context:
+        await self.resolver.build_payload(self.rule, self.pf_payload)
+
+    # Assert the circuit breaker provides the exact available options to the admin
+    error_msg = str(context.exception)
+    self.assertIn("customfield_10045", error_msg)
+    self.assertIn("Marketing", error_msg)
+    self.assertIn("Engineering, Human Resources", error_msg)

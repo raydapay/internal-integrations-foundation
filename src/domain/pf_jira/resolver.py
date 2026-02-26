@@ -211,6 +211,21 @@ class FieldDataResolver:
         """
         schema_type = field_schema.get("schema", {}).get("type")
 
+        # Proactive Domain Constraint Validation (allowedValues mismatch)
+        if "allowedValues" in field_schema:
+            allowed = field_schema["allowedValues"]
+            # Support resolution by either native Atlassian ID or string value
+            allowed_ids = {str(opt.get("id")) for opt in allowed if opt.get("id")}
+            allowed_values = {str(opt.get("value")) for opt in allowed if opt.get("value")}
+            str_val = str(value)
+
+            if str_val not in allowed_ids and str_val not in allowed_values:
+                valid_options = ", ".join(allowed_values)
+                raise SchemaValidationError(
+                    f"Value '{str_val}' is invalid for restricted field '{field_id}'. "
+                    f"Valid options are: {valid_options}"
+                )
+
         if schema_type == "user":
             account_id = await self._resolve_account_id(str(value))
             return {"id": account_id}
