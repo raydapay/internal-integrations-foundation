@@ -26,15 +26,15 @@
 
     <td class="is-vcentered">
         {% if rule.action.value | string | upper == 'SYNC' %}
-            <span class="tag is-success is-light">SYNC</span>
+            <span class="tag is-success is-soft">SYNC</span>
         {% else %}
-            <span class="tag is-danger is-light">DROP</span>
+            <span class="tag is-danger is-soft">DROP</span>
         {% endif %}
     </td>
 
     <td class="is-vcentered">
         {% if rule.condition_assignee_pattern %}
-            <span class="tag is-info is-light">{{ rule.condition_assignee_pattern }}</span>
+            <span class="tag is-info is-soft">{{ rule.condition_assignee_pattern }}</span>
         {% else %}
             <span class="has-text-grey is-size-7">ANY</span>
         {% endif %}
@@ -60,7 +60,7 @@
                     {# Silently skipped #}
 
                 {% elif mapping.jira_field_id == 'issuetype' %}
-                    <span class="tag is-info is-light" title="Issue Type">
+                    <span class="tag is-soft is-info" title="Issue Type">
                         {{ issuetype_map.get(mapping.source_value, mapping.source_value) if issuetype_map else mapping.source_value }}
                     </span>
 
@@ -68,11 +68,11 @@
                     {% set field_name = known_fields.get(mapping.jira_field_id, mapping.jira_field_id) %}
 
                     {% if mapping.source_type.value | string | upper == 'PF_PAYLOAD' or mapping.source_type | string | upper == 'PF_PAYLOAD' %}
-                        <span class="tag is-warning is-light" title="Extraction: {{ mapping.source_value }}" style="cursor: help;">
+                        <span class="tag tag is-soft is-warning" title="Extraction: {{ mapping.source_value }}" style="cursor: help;">
                             {{ field_name | capitalize }}
                         </span>
                     {% else %}
-                        <span class="tag is-primary is-light" title="Template: {{ mapping.source_value }}" style="cursor: help;">
+                        <span class="tag is-soft is-primary" title="Template: {{ mapping.source_value }}" style="cursor: help;">
                             {{ field_name | capitalize }}
                         </span>
                     {% endif %}

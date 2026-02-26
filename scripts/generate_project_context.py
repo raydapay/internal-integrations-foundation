@@ -32,6 +32,7 @@ def generate_project_context(
             depth = len(path.relative_to(root).parts)
             spacer = "    " * (depth - 1)
             f.write(f"{spacer}{path.name}/\n" if path.is_dir() else f"{spacer}{path.name}\n")
+            print(f"{spacer}{path.name}/" if path.is_dir() else f"{spacer}{path.name}")
         f.write("```\n\n---\n\n")
 
         def write_file_content(path: Path):
@@ -73,9 +74,10 @@ def generate_project_context(
 
 
 if __name__ == "__main__":
+    output_file = "project_full_context.md"
     generate_project_context(
         root_dir=".",
-        output_file="project_full_context.md",
+        output_file=output_file,
         exclude_dirs={"__pycache__", ".git", ".venv", ".uv", "node_modules", ".ruff_cache", "data", "secrets"},
-        exclude_files={".env", "uv.lock", ".gitignore", "generate_project_context.py"},
+        exclude_files={".env", "uv.lock", ".gitignore", "generate_project_context.py", output_file},
     )

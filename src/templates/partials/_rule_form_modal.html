@@ -72,13 +72,18 @@
                         <div class="field">
                             <label class="label is-small">Target Jira Project</label>
                             <div class="control">
-                                <select name="target_jira_project" class="select is-fullwidth is-small" required
+                                <select name="target_jira_project"
+                                        class="tom-select-init"
+                                        required
+                                        placeholder="Search for a project..."
                                         hx-get="/admin/rules/schema/issuetypes"
                                         hx-target="#form-issuetype-select"
                                         hx-indicator="#form-schema-loading">
                                     <option value="" disabled {% if not rule %}selected{% endif %}>-- Select Project --</option>
                                     {% for p in jira_projects %}
-                                    <option value="{{ p.key }}" {% if rule and rule.target_jira_project == p.key %}selected{% endif %}>{{ p.name }} ({{ p.key }})</option>
+                                    <option value="{{ p.key }}" {% if rule and rule.target_jira_project == p.key %}selected{% endif %}>
+                                        {{ p.name }} ({{ p.key }})
+                                    </option>
                                     {% endfor %}
                                 </select>
                             </div>
@@ -89,22 +94,26 @@
                         <div class="field">
                             <label class="label is-small">Reference Issue Type</label>
                             <div class="control">
-                                <select name="reference_issuetype" id="form-issuetype-select" class="select is-fullwidth is-small" required
-                                        hx-get="/admin/rules/schema/fields"
-                                        hx-include="[name='target_jira_project']"
-                                        hx-target="#form-dynamic-schema-fields"
-                                        hx-indicator="#form-schema-loading">
-                                    {% if current_project_issuetypes %}
-                                        <option value="" disabled>Select Reference Issue Type...</option>
-                                        {% for it in current_project_issuetypes %}
-                                            <option value="{{ it.id }}" {% if current_issuetype == it.id %}selected{% endif %}>{{ it.name }}</option>
-                                        {% endfor %}
-                                    {% elif current_issuetype %}
-                                        <option value="{{ current_issuetype }}" selected>{{ current_issuetype_name }}</option>
-                                    {% else %}
-                                        <option value="" disabled selected>Select Project First...</option>
-                                    {% endif %}
-                                </select>
+                                <div class="select is-fullwidth is-small is-soft-styled">
+                                    <select name="reference_issuetype"
+                                            id="form-issuetype-select"
+                                            required
+                                            hx-get="/admin/rules/schema/fields"
+                                            hx-include="[name='target_jira_project']"
+                                            hx-target="#form-dynamic-schema-fields"
+                                            hx-indicator="#form-schema-loading">
+                                        {% if current_project_issuetypes %}
+                                            <option value="" disabled>Select Reference Issue Type...</option>
+                                            {% for it in current_project_issuetypes %}
+                                                <option value="{{ it.id }}" {% if current_issuetype == it.id %}selected{% endif %}>{{ it.name }}</option>
+                                            {% endfor %}
+                                        {% elif current_issuetype %}
+                                            <option value="{{ current_issuetype }}" selected>{{ current_issuetype_name }}</option>
+                                        {% else %}
+                                            <option value="" disabled selected>Select Project First...</option>
+                                        {% endif %}
+                                    </select>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -118,7 +127,7 @@
                         {% if required_fields or optional_fields %}
                             {% include "partials/_schema_fields.html" %}
                         {% else %}
-                            <div class="notification is-light is-size-7 p-3 has-text-grey">
+                            <div class="notification is-size-7 p-3 has-text-grey is-soft">
                                 Modify the Project or Issue Type to trigger Jira createmeta loading.
                             </div>
                         {% endif %}
