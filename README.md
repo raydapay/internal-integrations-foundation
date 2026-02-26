@@ -26,7 +26,8 @@ Every technology choice was optimized for minimal Total Cost of Ownership (TCO) 
 
 * **Zero-JS-Build Admin UI:** A fully functional dashboard utilizing HTMX for DOM mutations and SSE for real-time Cloudflare-proof log streaming. No React, Webpack, or Node.js required.
 * **Google SSO Security:** Edge-level access control via Authlib and session middleware.
-* **Dynamic Mapping Engine:** SQLite-backed routing rules allowing administrators to map incoming SaaS webhooks to specific target systems without deploying code.
+* **Dynamic Mapping & JSONPath Injection:** SQLite-backed firewall rules evaluating conditions in $O(N)$ linear priority. Administrators can map static values or extract variables via JSONPath (`$.assigned_to.email`) directly into upstream API payloads.
+* **Self-Healing Schema Validation:** A `FieldDataResolver` pipeline that caches upstream schemas (e.g., Jira `createmeta`), proactively traps configuration drift, executes surgical Redis cache invalidations, and automatically trips circuit breakers to prevent data loss or infinite retry loops.
 * **State Reconciliation:** Distributed locking and SHA-256 state hashing to detect API deltas when native vendor webhooks are unavailable.
 
 ## 🚦 Quick Start

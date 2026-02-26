@@ -15,6 +15,13 @@ We explicitly rejected building a nested boolean logic engine.
 * **The Solution (The Firewall Model):** We unified `ProjectRoutingRule` and `TaskTypeRule` into a single `RoutingRule` table. Rules are evaluated in a strict, linear O(N) sequence based on a `priority` integer (exactly like an AWS Network ACL or firewall).
 * **Execution:** A single rule acts as an implicit `AND` across its conditions. Multiple rules act as an implicit `OR` across the system. The evaluator yields on the first match, resulting in highly deterministic and low-latency dispatching.
 
+### 1.1 Dynamic Payload Resolution & Injection
+Once the firewall yields a matching rule, the engine must construct the Jira issue payload. We rejected static column-based mappings (e.g., hardcoding `assignee` or `issuetype` columns on the rule table) in favor of a normalized `RuleFieldMapping` relation.
+
+* **Just-In-Time (JIT) Resolution:** The `FieldDataResolver` fetches the live Jira `createmeta` schema for the target project and issue type. It enforces Atlassian's REST API constraints dynamically (e.g., dropping the payload if a required field is missing).
+* **Injection Vectors:** The engine supports two mapping paradigms:
+  1. `STATIC`: Hardcoded overrides (e.g., forcing `customfield_10010` to `"HR-Task"`).
+  2. `PF_PAYLOAD`: Dynamic JSONPath extraction from the incoming Webhook (e.g., mapping `$.assigned_to.email` to a Jira `user` object). The resolver automatically handles type casting (e.g., resolving the email to an Atlassian `accountId`).
 ---
 
 ## 2. State Recovery & Eventual Consistency

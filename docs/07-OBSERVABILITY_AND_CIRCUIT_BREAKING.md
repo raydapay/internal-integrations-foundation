@@ -37,6 +37,16 @@ If the validation task detects an irreconcilable schema drift (e.g., an unmapped
 
 **Assumption:** Temporary API timeouts during the nightly sync could trigger false positives. The validation task must implement an exponential backoff retry mechanism (e.g., 1s, 2s, 4s, 8s, 16s) before officially tripping the circuit breaker and disabling a rule.
 
+### 3.3 Reactive Cache Invalidation (The 400 Trap)
+The `FieldDataResolver` caches Jira `createmeta` schemas in Redis with a 1-hour TTL (`jira:createmeta:{project}:{issuetype}`) to prevent N+1 API rate limiting. This introduces a vulnerability window: if a Jira administrator alters a schema, the local cache becomes stale until the TTL expires or the Nightly Sync runs.
+
+**The Self-Healing Mechanism:**
+To bridge this gap, the ARQ worker wraps Jira `POST/PUT` mutations in an HTTP trap.
+1. If Jira rejects the payload with an `HTTP 400 Bad Request`, the worker assumes schema drift.
+2. It surgically deletes the specific project/issuetype schema key from Redis.
+3. It raises an explicit ARQ `Retry(defer=5)` exception.
+4. On the subsequent execution 5 seconds later, the resolver fetches the fresh schema directly from Jira, evaluates the new constraints, and cleanly trips the `SchemaValidationError` circuit breaker, neutralizing the Poison Pill payload.
+
 ## 4. Architectural Forecasts & Trade-offs
 
 When forecasting the impact of proactive schema validation on operational workflows, we evaluate two systemic trajectories:
