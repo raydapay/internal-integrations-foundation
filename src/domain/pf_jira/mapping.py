@@ -1,5 +1,4 @@
 import logging
-import re
 from typing import Any
 
 from sqlalchemy.orm import selectinload
@@ -10,32 +9,6 @@ from src.domain.pf_jira.models import RoutingAction, RoutingRule
 from src.domain.pf_jira.resolver import FieldDataResolver, SchemaValidationError
 
 logger = logging.getLogger(__name__)
-
-JIRA_CUSTOM_FIELD_START_DATE = "customfield_10015"
-
-
-def build_adf_description(task: dict[str, Any]) -> dict[str, Any]:
-    """Generates a strict Atlassian Document Format (ADF) AST for the issue description."""
-    desc = task.get("description_plain") or "No description provided."
-    assoc_name = task.get("associated_to", {}).get("full_name", "Unknown")
-    deadline = task.get("ends_on") or task.get("starts_on") or "None"
-
-    return {
-        "type": "doc",
-        "version": 1,
-        "content": [
-            {"type": "paragraph", "content": [{"text": desc, "type": "text"}]},
-            {"type": "rule"},
-            {
-                "type": "paragraph",
-                "content": [
-                    {"text": "PeopleForce Metadata\n", "type": "text", "marks": [{"type": "strong"}]},
-                    {"text": f"Subject: {assoc_name}\n", "type": "text"},
-                    {"text": f"Deadline: {deadline}", "type": "text"},
-                ],
-            },
-        ],
-    }
 
 
 async def evaluate_routing_rules(
@@ -95,26 +68,32 @@ async def evaluate_routing_rules(
     return RoutingAction.DROP, None
 
 
-def _evaluate_conditions(rule: RoutingRule, pf_payload: dict[str, Any]) -> bool:
-    """Performs an implicit AND evaluation of all defined rule conditions.
+def _evaluate_conditions(rule: RoutingRule, pf_task: dict[str, Any]) -> bool:
+    """Evaluates if a PeopleForce task matches a RoutingRule's conditions, with verbose debugging."""
 
-    Args:
-        rule: The RoutingRule instance.
-        pf_payload: The source payload.
-
-    Returns:
-        bool: True if all defined conditions match, False otherwise.
-    """
-    if rule.condition_assignee_pattern:
-        # Assuming PF payload structure {"assignee": {"email": "..."}}
-        # Dot-notation resolver can be used here for deeply nested dynamic conditions later.
-        assignee_email = pf_payload.get("assignee", {}).get("email", "")
-        if not assignee_email or not re.search(rule.condition_assignee_pattern, assignee_email, re.IGNORECASE):
-            return False
-
+    # 1. Title Condition
     if rule.condition_title_keyword:
-        title = pf_payload.get("name", "") or pf_payload.get("title", "")
-        if rule.condition_title_keyword.lower() not in title.lower():
+        keyword = rule.condition_title_keyword.strip().lower()
+        title = pf_task.get("title", "").lower()
+        if keyword not in title:
             return False
+
+    # 2. Assignee Condition
+    if rule.condition_assignee_pattern:
+        expected_pattern = rule.condition_assignee_pattern.strip().lower()
+
+        # Safely extract the email, handling cases where 'assigned_to' is None or missing
+        assigned_to_obj = pf_task.get("assigned_to") or {}
+        actual_email = assigned_to_obj.get("email", "").strip().lower()
+
+        logger.debug(
+            f"[Rule #{rule.id} Eval] Expected Assignee: '{expected_pattern}' | Actual PF Payload: '{actual_email}'"
+        )
+
+        if expected_pattern not in actual_email:
+            logger.debug(f"[Rule #{rule.id} Eval] ❌ REJECTED: '{expected_pattern}' not found in '{actual_email}'")
+            return False
+
+        logger.debug(f"[Rule #{rule.id} Eval] ✅ MATCHED: Assignee condition passed.")
 
     return True

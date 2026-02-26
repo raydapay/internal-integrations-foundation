@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import time
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
@@ -16,11 +17,12 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import desc, or_, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from src.app.schemas import AuditQueryParams, UserAccessForm, UserProvisionForm
+from src.app.schemas import AuditQueryParams, PeopleForceTaskPayload, UserAccessForm, UserProvisionForm
 from src.config.settings import settings
 from src.core.broadcaster import log_broadcaster
 from src.core.clients import JiraClient, NotificationClient, PeopleForceClient
 from src.core.database import get_session
+from src.core.utils import generate_highlighted_json
 from src.domain.pf_jira.models import (
     DomainConfig,
     MappingSourceType,
@@ -357,6 +359,29 @@ async def rules_dashboard(
     finally:
         await jira_client.close()
 
+    # Extract the example payload from your Pydantic Model.
+    # If using Pydantic v2 model_json_schema:
+    example_data = PeopleForceTaskPayload.model_json_schema().get("examples", [{}])[0]
+
+    # # Fallback to a dictionary representing the model state if examples aren't defined in the schema:
+    # example_data = {
+    #     "id": 7654321,
+    #     "type": "Tasks::General",
+    #     "title": "Nice task title",
+    #     "starts_on": "2026-02-27",
+    #     "ends_on": None,
+    #     "completed_at": None,
+    #     "completed": False,
+    #     "description": "Rich HTML text with <a href=...>links</a>",
+    #     "description_plain": "Plain text fallback",
+    #     "assigned_to": {"id": 123456, "full_name": "Jane Doe", "email": "jane@example.com"},
+    #     "associated_to": {"id": 123458, "type": "Employee", "full_name": "Bobby Smith", "email": "bobby@example.com"},
+    #     "created_by": {"id": 123457, "full_name": "John Doe", "email": "john@example.com"}
+    # }
+
+    # Generate the safe, colored HTML markup
+    pf_schema_html = generate_highlighted_json(example_data)
+
     return templates.TemplateResponse(
         "rules.html",
         {
@@ -365,6 +390,7 @@ async def rules_dashboard(
             "routing_rules": rules,
             "jira_projects": jira_projects,
             "issuetype_map": issuetype_map,
+            "pf_schema_html": pf_schema_html,  # INJECT HERE
         },
     )
 
@@ -405,16 +431,31 @@ async def add_routing_rule(
             if not val_str:
                 continue
 
-            # Route to the appropriate AST parser based on string heuristics
-            if val_str.startswith("$."):
-                source_type = MappingSourceType.PF_PAYLOAD
-            elif "{{" in val_str and "}}" in val_str:
-                source_type = MappingSourceType.TEMPLATE
-            else:
-                source_type = MappingSourceType.STATIC
+            # AST Heuristic Parsing for Unified {{ ... }} Syntax
+            exact_match_pattern = re.compile(r"^\{\{\s*([\w\.]+)\s*\}\}$")
 
-            new_rule.field_mappings.append(
-                RuleFieldMapping(jira_field_id=jira_field_id, source_type=source_type, source_value=val_str)
+            if exact_match_pattern.match(val_str):
+                # It is EXACTLY a single variable (e.g., "{{ assigned_to.email }}").
+                # Treat as Extraction to preserve native type (PF_PAYLOAD)
+                # Strip the brackets to store the raw JSONPath
+                clean_path = exact_match_pattern.match(val_str).group(1)
+                source_type = MappingSourceType.PF_PAYLOAD
+                final_val = clean_path
+            elif "{{" in val_str and "}}" in val_str:
+                # It contains mixed text (e.g., "Task: {{ title }}"). Treat as String Template.
+                source_type = MappingSourceType.TEMPLATE
+                final_val = val_str
+            elif val_str.startswith("$."):
+                # Legacy support for existing $.path rules in the database
+                source_type = MappingSourceType.PF_PAYLOAD
+                final_val = val_str.lstrip("$.")
+            else:
+                # No tags detected. Treat as static override.
+                source_type = MappingSourceType.STATIC
+                final_val = val_str
+
+            new_rule.field_mappings.append(  # or new_rule.field_mappings.append(
+                RuleFieldMapping(jira_field_id=jira_field_id, source_type=source_type, source_value=final_val)
             )
 
     session.add(new_rule)
@@ -441,11 +482,11 @@ def _parse_jira_schema_fields(schema: dict[str, Any]) -> tuple[list[tuple[str, A
     """Helper to separate and filter schema fields into required and optional lists."""
     required_fields = []
     optional_fields = []
-    exclude_ids = {"project", "issuetype", "attachment", "summary", "duedate", "description"}
-    exclude_names = {"Start date", "Due date"}
+    # Removed summary, description, duedate, and start_date from the exclude list
+    exclude_ids = {"project", "issuetype", "attachment"}
 
     for field_id, meta in schema.items():
-        if field_id in exclude_ids or meta.get("name") in exclude_names:
+        if field_id in exclude_ids:
             continue
         if field_id == "reporter":
             meta["required"] = False
@@ -478,9 +519,15 @@ async def edit_routing_rule_modal(
     required_fields = []
     optional_fields = []
     jira_projects = []
-    current_project_issuetypes = []  # <-- Initialize new list
+    current_project_issuetypes = []
 
-    existing_mappings = {m.jira_field_id: m.source_value for m in rule.field_mappings}
+    existing_mappings = {}
+    for m in rule.field_mappings:
+        if m.source_type == MappingSourceType.PF_PAYLOAD:
+            existing_mappings[m.jira_field_id] = f"{{{{ {m.source_value} }}}}"
+        else:
+            existing_mappings[m.jira_field_id] = m.source_value
+
     current_issuetype = existing_mappings.get("issuetype", "")
 
     try:
@@ -488,7 +535,6 @@ async def edit_routing_rule_modal(
         issuetype_map = await jira_client.get_issue_type_map()
 
         if rule.target_jira_project:
-            # 1. Eagerly fetch the valid issue types for this specific project
             try:
                 resp = await jira_client.client.get(f"/rest/api/3/project/{rule.target_jira_project}")
                 resp.raise_for_status()
@@ -498,7 +544,6 @@ async def edit_routing_rule_modal(
             except Exception as e:
                 logger.error(f"Failed to fetch issue types for project {rule.target_jira_project}: {e}")
 
-            # 2. Pre-flight the schema if issuetype is already known
             if current_issuetype:
                 schema = await resolver._get_createmeta(rule.target_jira_project, current_issuetype)
                 required_fields, optional_fields = _parse_jira_schema_fields(schema)
@@ -516,7 +561,7 @@ async def edit_routing_rule_modal(
             "jira_projects": jira_projects,
             "current_issuetype": current_issuetype,
             "current_issuetype_name": issuetype_map.get(current_issuetype, current_issuetype),
-            "current_project_issuetypes": current_project_issuetypes,  # <-- Inject into context
+            "current_project_issuetypes": current_project_issuetypes,
             "existing_mappings": existing_mappings,
             "required_fields": required_fields,
             "optional_fields": optional_fields,
@@ -881,6 +926,32 @@ async def get_validation_status(
     )
 
 
+@router.get("/rules/schema/fields", response_class=HTMLResponse)
+async def get_schema_fields(
+    request: Request,
+    target_jira_project: str,
+    reference_issuetype: str,
+    user: dict[str, Any] = Depends(require_pf_jira_admin),
+) -> HTMLResponse:
+    """Fetches the live Jira createmeta schema and renders the dynamic input fields."""
+    jira_client = JiraClient()
+    redis_pool = getattr(request.app.state, "arq_pool", None)
+    resolver = FieldDataResolver(jira_client, redis_pool)
+
+    try:
+        schema = await resolver._get_createmeta(target_jira_project, reference_issuetype)
+        required_fields, optional_fields = _parse_jira_schema_fields(schema)
+
+        return templates.TemplateResponse(
+            "partials/_schema_fields.html",
+            {"request": request, "required_fields": required_fields, "optional_fields": optional_fields},
+        )
+    except Exception as e:
+        return HTMLResponse(content=f'<div class="notification is-danger">Failed to load schema: {e}</div>')
+    finally:
+        await jira_client.close()
+
+
 @router.get("/rules/schema/issuetypes", response_class=HTMLResponse)
 async def get_project_issuetypes(request: Request, target_jira_project: str) -> HTMLResponse:
     jira_client = JiraClient()
@@ -914,24 +985,26 @@ async def get_project_issuetypes(request: Request, target_jira_project: str) -> 
         await jira_client.close()
 
 
-@router.get("/rules/schema/fields", response_class=HTMLResponse)
-async def get_schema_fields(request: Request, target_jira_project: str, reference_issuetype: str) -> HTMLResponse:
-    jira_client = JiraClient()
-    redis_pool = request.app.state.arq_pool
-    resolver = FieldDataResolver(jira_client, redis_pool)
+def _parse_jira_schema_fields(schema: dict[str, Any]) -> tuple[list[tuple[str, Any]], list[tuple[str, Any]]]:
+    """Helper to separate and filter schema fields into required and optional lists."""
+    required_fields = []
+    optional_fields = []
 
-    try:
-        schema = await resolver._get_createmeta(target_jira_project, reference_issuetype)
-        required_fields, optional_fields = _parse_jira_schema_fields(schema)
+    exclude_ids = {"project", "issuetype", "attachment"}
+    exclude_names = set()
 
-        return templates.TemplateResponse(
-            "partials/_schema_fields.html",
-            {"request": request, "required_fields": required_fields, "optional_fields": optional_fields},
-        )
-    except Exception as e:
-        return HTMLResponse(content=f'<div class="notification is-danger">Failed to load schema: {e}</div>')
-    finally:
-        await jira_client.close()
+    for field_id, meta in schema.items():
+        if field_id in exclude_ids or meta.get("name") in exclude_names:
+            continue
+        if field_id == "reporter":
+            meta["required"] = False
+
+        if meta.get("required"):
+            required_fields.append((field_id, meta))
+        else:
+            optional_fields.append((field_id, meta))
+
+    return required_fields, optional_fields
 
 
 @router.get("/rules/routing/new", response_class=HTMLResponse)

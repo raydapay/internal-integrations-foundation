@@ -1,0 +1,66 @@
+<div class="modal" id="schema-helper-modal">
+    <div class="modal-background" onclick="this.parentElement.classList.remove('is-active')"></div>
+    <div class="modal-card" style="width: 850px; max-width: 95vw;">
+        <header class="modal-card-head">
+            <p class="modal-card-title">PeopleForce Payload Reference</p>
+            <button class="delete" aria-label="close" onclick="document.getElementById('schema-helper-modal').classList.remove('is-active')"></button>
+        </header>
+        <section class="modal-card-body content">
+            <p class="is-size-6">
+                All dynamic data is injected using the <code>{% raw %}{{ path.to.field }}{% endraw %}</code> syntax. If you provide a single variable, the system preserves its native type. If you mix variables with text, the system compiles it into a string template.
+            </p>
+
+            <h5 class="title is-6 mt-4">Available Payload Structure</h5>
+            <pre class="is-size-7 has-background-black-ter has-text-grey-lighter p-3" style="border-radius: 4px; line-height: 1.4;">
+                {{ pf_schema_html }}
+            </pre>
+            <h5 class="title is-6 mt-5">Common Mapping Examples</h5>
+            <table class="table is-bordered is-striped is-narrow is-fullwidth is-size-7">
+                <thead>
+                    <tr>
+                        <th>Jira Field</th>
+                        <th>Unified Syntax</th>
+                        <th>Execution Result</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Assignee / Reporter</strong></td>
+                        <td><code>{% raw %}{{ assigned_to.email }}{% endraw %}</code></td>
+                        <td>Extracted natively as a string and mapped to an Atlassian Account ID.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Summary</strong></td>
+                        <td><code>[PF] {% raw %}{{ title }} - {{ associated_to.full_name }}{% endraw %}</code></td>
+                        <td>Interpolated: <i>"[PF] Nice task title - Bobby Smith"</i></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Description</strong></td>
+                        <td><code>Task: {% raw %}{{ description_plain }} \n Deadline: {{ ends_on }}{% endraw %}</code></td>
+                        <td>Safely parsed into the Atlassian Document Format (ADF).</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div class="notification is-warning is-dark is-size-7 mt-4 p-3">
+                <h6 class="title is-7 mb-2 has-text-warning-light">⚠️ Architectural Edge Cases</h6>
+                <ul style="margin-top: 0; padding-left: 1.5em; list-style-type: disc;">
+                    <li class="mb-1"><strong>Missing Entities:</strong> The <code>associated_to</code> or <code>assigned_to</code> objects will be completely absent if the task is unassigned in PeopleForce. Unresolved variables will deterministically evaluate to an empty string.</li>
+                    <li><strong>Permission Rejections:</strong> If a dynamically mapped assignee lacks Jira project permissions, the ARQ worker will catch the HTTP 400 and drop the specific synchronization attempt to the Dead Letter Queue, without failing the entire routing rule.</li>
+                </ul>
+            </div>
+        </section>
+    </div>
+</div>
+
+<script>
+    // Vanilla JS listener for Escape key propagation
+    document.addEventListener('keydown', function(event) {
+        if (event.key === 'Escape') {
+            const modal = document.getElementById('schema-helper-modal');
+            if (modal && modal.classList.contains('is-active')) {
+                modal.classList.remove('is-active');
+            }
+        }
+    });
+</script>

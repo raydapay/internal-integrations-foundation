@@ -29,7 +29,7 @@ class TestPfJiraTasks(BaseTest):
     async def test_sync_pf_to_jira_task_lifecycle(self, mock_pf_class, mock_jira_class, mock_evaluate) -> None:
         """Validates the create, update, and skip branches of the reconciliation engine."""
         # Mock the routing engine to always return SYNC and a dummy payload
-        mock_evaluate.return_value = (SyncOperation.CREATE, {"fields": {"project": {"key": "IT"}}})
+        mock_evaluate.return_value = (RoutingAction.SYNC, {"fields": {"project": {"key": "IT"}}})
         task_1 = {
             "id": 100,
             "title": "Onboarding",

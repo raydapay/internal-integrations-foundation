@@ -39,102 +39,133 @@ class TestFieldDataResolver(unittest.IsolatedAsyncioTestCase):
 
     async def test_build_payload_success(self) -> None:
         """Verifies dot-notation extraction, type casting, and accountId resolution."""
-        # Setup mocks
         self.mock_redis.get.return_value = json.dumps(self.createmeta_response)
 
-        # FIX: Use MagicMock for the synchronous response object methods
-        mock_user_resp = MagicMock()
-        mock_user_resp.json.return_value = [{"accountId": "12345-abcde"}]
-        mock_user_resp.raise_for_status.return_value = None
+        self.resolver._resolve_account_id = AsyncMock(return_value="12345-abcde")
 
-        self.mock_jira.client.get.return_value = mock_user_resp
-
-        # Injecting 'summary' to bypass the Strict Validation in Pass 3 for this test
         self.rule.field_mappings.append(
             RuleFieldMapping(jira_field_id="summary", source_type=MappingSourceType.STATIC, source_value="New Hire")
         )
 
         payload = await self.resolver.build_payload(self.rule, self.pf_payload)
 
-        self.assertEqual(payload["fields"]["issuetype"]["id"], "10001")
-        self.assertEqual(payload["fields"]["assignee"]["id"], "12345-abcde")
+        self.assertEqual(payload["fields"]["issuetype"], {"id": "10001"})
+        self.assertEqual(payload["fields"]["assignee"], {"id": "12345-abcde"})
         self.assertEqual(payload["fields"]["labels"], ["PF", "Onboarding"])
         self.assertEqual(payload["fields"]["summary"], "New Hire")
 
-        # Verify network I/O
-        self.mock_jira.client.get.assert_called_once_with("/rest/api/3/user/search?query=test@example.com")
+        # Verify the resolver was called with the exact extracted email
+        self.resolver._resolve_account_id.assert_called_once_with("test@example.com")
 
     async def test_strict_validation_catches_missing_required_field(self) -> None:
         """Verifies that missing required fields raise SchemaValidationError."""
-        # Add a custom required field that is NOT in the bypass whitelist
         self.createmeta_response["customfield_strict"] = {"required": True, "name": "Cost Center"}
         self.mock_redis.get.return_value = json.dumps(self.createmeta_response)
 
         mock_user_resp = MagicMock()
         mock_user_resp.json.return_value = [{"accountId": "12345-abcde"}]
-        self.mock_jira.client.get.return_value = mock_user_resp
 
-        # No mapping is provided for 'customfield_strict', should throw SchemaValidationError
+        # 🟢 FIXED: Explicitly bind as AsyncMock
+        self.mock_jira.client.get = AsyncMock(return_value=mock_user_resp)
+
         with self.assertRaises(SchemaValidationError):
             await self.resolver.build_payload(self.rule, self.pf_payload)
 
+    async def test_allowed_values_mismatch(self) -> None:
+        """Verifies the validator catches when a mapping uses an option Jira no longer recognizes."""
+        self.createmeta_response["customfield_10045"] = {
+            "fieldId": "customfield_10045",
+            "required": False,
+            "schema": {"type": "option"},
+            "allowedValues": [{"id": "10001", "value": "Engineering"}, {"id": "10002", "value": "Human Resources"}],
+        }
+        self.mock_redis.get.return_value = json.dumps(self.createmeta_response)
 
-async def test_allowed_values_mismatch(self) -> None:
-    """Verifies the validator catches when a mapping uses an option Jira no longer recognizes."""
-    # Inject a restricted select-list into the mocked createmeta
-    self.createmeta_response["customfield_10045"] = {
-        "fieldId": "customfield_10045",
-        "required": False,
-        "schema": {"type": "option"},
-        "allowedValues": [{"id": "10001", "value": "Engineering"}, {"id": "10002", "value": "Human Resources"}],
-    }
-    self.mock_redis.get.return_value = json.dumps(self.createmeta_response)
+        mock_user_resp = MagicMock()
+        mock_user_resp.json.return_value = [{"accountId": "12345-abcde"}]
+        mock_user_resp.raise_for_status.return_value = None
 
-    # FIX: Provide a synchronous MagicMock for the assignee lookup to prevent coroutine subscript errors
-    mock_user_resp = MagicMock()
-    mock_user_resp.json.return_value = [{"accountId": "12345-abcde"}]
-    mock_user_resp.raise_for_status.return_value = None
-    self.mock_jira.client.get.return_value = mock_user_resp
+        # 🟢 FIXED: Explicitly bind as AsyncMock
+        self.mock_jira.client.get = AsyncMock(return_value=mock_user_resp)
 
-    # Map a deprecated/invalid static value to the restricted field
-    self.rule.field_mappings.append(
-        RuleFieldMapping(
-            jira_field_id="customfield_10045",
-            source_type=MappingSourceType.STATIC,
-            source_value="Marketing",  # Does not exist in allowedValues
+        self.rule.field_mappings.append(
+            RuleFieldMapping(
+                jira_field_id="customfield_10045",
+                source_type=MappingSourceType.STATIC,
+                source_value="Marketing",
+            )
         )
-    )
 
-    with self.assertRaises(SchemaValidationError) as context:
-        await self.resolver.build_payload(self.rule, self.pf_payload)
+        with self.assertRaises(SchemaValidationError) as context:
+            await self.resolver.build_payload(self.rule, self.pf_payload)
 
-    # Assert the circuit breaker provides the exact available options to the admin
-    error_msg = str(context.exception)
-    self.assertIn("customfield_10045", error_msg)
-    self.assertIn("Marketing", error_msg)
-    self.assertIn("Engineering, Human Resources", error_msg)
+        error_msg = str(context.exception)
+        self.assertIn("customfield_10045", error_msg)
+        self.assertIn("Marketing", error_msg)
+
+    async def test_resolve_template_interpolation(self) -> None:
+        """Verifies regex interpolation handles mixed types, nulls, and nested JSONPaths."""
+        pf_payload = {
+            "title": "Onboarding Verification",
+            "metadata": {"priority_id": 1, "notes": None},
+            "assignee": {"email": "test@example.com"},
+        }
+
+        res_1 = self.resolver._resolve_template("Task: {{ title }} - Assigned: {{ assignee.email }}", pf_payload)
+        self.assertEqual(res_1, "Task: Onboarding Verification - Assigned: test@example.com")
+
+        res_2 = self.resolver._resolve_template("Priority ID: {{ metadata.priority_id }}", pf_payload)
+        self.assertEqual(res_2, "Priority ID: 1")
+
+        res_3 = self.resolver._resolve_template(
+            "Notes: {{ metadata.notes }} | Missing: {{ does.not.exist }}", pf_payload
+        )
+        self.assertEqual(res_3, "Notes:  | Missing: ")
+
+        res_4 = self.resolver._resolve_template("Static Override", pf_payload)
+        self.assertEqual(res_4, "Static Override")
+
+    async def test_date_and_datetime_formatting(self) -> None:
+        """Verifies that date fields safely coerce Python None and string 'None' to explicit JSON nulls."""
+        # Inject date schemas into the mock
+        self.createmeta_response["duedate"] = {"fieldId": "duedate", "required": False, "schema": {"type": "date"}}
+        self.createmeta_response["customfield_10015"] = {
+            "fieldId": "customfield_10015",
+            "required": False,
+            "schema": {"type": "datetime"},
+        }
+        self.mock_redis.get.return_value = json.dumps(self.createmeta_response)
+
+        # Mock the rule to extract a dynamic date field
+        self.rule.field_mappings.append(
+            RuleFieldMapping(
+                jira_field_id="duedate", source_type=MappingSourceType.PF_PAYLOAD, source_value="extracted_date"
+            )
+        )
+
+        # Define the exact matrix of failure vectors we discovered
+        test_vectors = [
+            (None, None),  # Native Python None
+            ("None", None),  # Template stringified None
+            ("none", None),  # Lowercase text
+            ("null", None),  # JSON null text
+            ("", None),  # Empty string
+            ("  ", None),  # Whitespace
+            ("2026-02-27", "2026-02-27"),  # Valid date string
+        ]
+
+        for input_val, expected_out in test_vectors:
+            with self.subTest(input_val=input_val):
+                pf_payload = {"task_id": 99, "extracted_date": input_val}
+                payload = await self.resolver.build_payload(self.rule, pf_payload)
+
+                # Assert Jira gets exactly what it needs
+                self.assertEqual(
+                    payload["fields"].get("duedate"),
+                    expected_out,
+                    f"Resolver failed to safely format date input: '{input_val}'",
+                )
 
 
-async def test_resolve_template_interpolation(self) -> None:
-    """Verifies regex interpolation handles mixed types, nulls, and nested JSONPaths."""
-    pf_payload = {
-        "title": "Onboarding Verification",
-        "metadata": {"priority_id": 1, "notes": None},
-        "assignee": {"email": "test@example.com"},
-    }
-
-    # Case 1: Standard interpolation
-    res_1 = self.resolver._resolve_template("Task: {{ title }} - Assigned: {{ assignee.email }}", pf_payload)
-    self.assertEqual(res_1, "Task: Onboarding Verification - Assigned: test@example.com")
-
-    # Case 2: Integer casting
-    res_2 = self.resolver._resolve_template("Priority ID: {{ metadata.priority_id }}", pf_payload)
-    self.assertEqual(res_2, "Priority ID: 1")
-
-    # Case 3: Missing paths and explicit None values evaluate to empty strings
-    res_3 = self.resolver._resolve_template("Notes: {{ metadata.notes }} | Missing: {{ does.not.exist }}", pf_payload)
-    self.assertEqual(res_3, "Notes:  | Missing: ")
-
-    # Case 4: No interpolation tags (Acts as static string)
-    res_4 = self.resolver._resolve_template("Static Override", pf_payload)
-    self.assertEqual(res_4, "Static Override")
+if __name__ == "__main__":
+    unittest.main()

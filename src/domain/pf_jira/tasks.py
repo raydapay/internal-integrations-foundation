@@ -22,11 +22,7 @@ from src.core.clients import JiraClient, PeopleForceClient
 from src.core.database import async_session_maker, engine
 from src.core.logger import configure_logging
 from src.core.notifications import notify
-from src.domain.pf_jira.mapping import (
-    JIRA_CUSTOM_FIELD_START_DATE,
-    build_adf_description,
-    evaluate_routing_rules,
-)
+from src.domain.pf_jira.mapping import evaluate_routing_rules
 from src.domain.pf_jira.models import (
     DomainConfig,
     MappingSourceType,
@@ -178,7 +174,6 @@ class TaskContext:
     id: str
     is_completed: bool
     hash: str
-    summary: str
 
 
 def _is_task_historical(task: dict[str, Any], cutoff_date: datetime, task_id: str) -> bool:
@@ -210,21 +205,11 @@ async def _handle_issue_creation(sync_ctx: SyncContext, task_ctx: TaskContext, j
     """Executes the complete lifecycle for generating a new Jira issue and recording state."""
     task_logger = logger.bind(pf_task_id=task_ctx.id, job_id=sync_ctx.job_id)
 
-    # 1. Inject code-computed fields (bypassing the UI mapper)
-    jira_payload["fields"]["summary"] = task_ctx.summary
-    jira_payload["fields"]["description"] = build_adf_description(task_ctx.raw)
-
-    # 2. Assignee Fallback Logic
+    # 1. Assignee Fallback Logic (Keep this as a failsafe if dynamic mapping is empty)
     if "assignee" not in jira_payload["fields"] and sync_ctx.config.jira_fallback_account_id:
         jira_payload["fields"]["assignee"] = {"id": sync_ctx.config.jira_fallback_account_id}
 
-    # 3. Dynamic Dates
-    if task_ctx.raw.get("ends_on"):
-        jira_payload["fields"]["duedate"] = task_ctx.raw.get("ends_on")
-    if task_ctx.raw.get("starts_on"):
-        jira_payload["fields"][JIRA_CUSTOM_FIELD_START_DATE] = task_ctx.raw.get("starts_on")
-
-    # 4. Immutable Data Lineage
+    # 2. Immutable Data Lineage & Folksonomy (Dynamic Config)
     jira_payload["properties"] = [
         {"key": sync_ctx.config.jira_entity_property_key, "value": {"pf_task_id": task_ctx.id}}
     ]
@@ -258,7 +243,6 @@ async def _handle_issue_creation(sync_ctx: SyncContext, task_ctx: TaskContext, j
             details=json.dumps(
                 {
                     "project": jira_payload["fields"].get("project", {}).get("key"),
-                    "summary_injected": task_ctx.summary,
                     "dynamic_fields_mapped": list(jira_payload["fields"].keys()),
                 },
                 indent=2,
@@ -292,19 +276,14 @@ async def _handle_issue_update(
     update_fields.pop("project", None)
     update_fields.pop("issuetype", None)
 
-    update_fields["summary"] = task_ctx.summary
-    update_fields["description"] = build_adf_description(task_ctx.raw)
-
     if "assignee" not in update_fields:
         if sync_ctx.config.jira_fallback_account_id:
             update_fields["assignee"] = {"id": sync_ctx.config.jira_fallback_account_id}
         else:
             update_fields["assignee"] = None  # Explicitly unassign if mapping fails or is empty
 
-    if task_ctx.raw.get("ends_on"):
-        update_fields["duedate"] = task_ctx.raw.get("ends_on")
-    if task_ctx.raw.get("starts_on"):
-        update_fields[JIRA_CUSTOM_FIELD_START_DATE] = task_ctx.raw.get("starts_on")
+    update_payload = {"fields": update_fields}
+    task_logger.debug(f"Computed Update Payload: {json.dumps(update_payload)}")
 
     update_payload = {"fields": update_fields}
     task_logger.debug(f"Computed Update Payload: {json.dumps(update_payload)}")
@@ -342,6 +321,71 @@ async def _handle_issue_update(
     task_logger.info(f"Updated Jira issue {issue_key}")
 
 
+async def _handle_jira_400_bad_request(
+    e: httpx.HTTPStatusError,
+    ctx: SyncContext,
+    task_id: str,
+    jira_payload: dict[str, Any],
+    task_logger: Any,
+) -> bool:
+    """Evaluates an HTTP 400 rejection from Jira to determine the failure vector.
+
+    Args:
+        e: The HTTP error exception.
+        ctx: The active synchronization context.
+        task_id: The PeopleForce task ID.
+        jira_payload: The computed Jira payload that was rejected.
+        task_logger: The bound logger for the current task.
+
+    Returns:
+        bool: True if the payload was dropped to the DLQ (caller should yield).
+
+    Raises:
+        Retry: If structural schema drift is suspected, forcing a cache purge and retry.
+    """
+    try:
+        error_payload = e.response.json()
+        jira_errors = error_payload.get("errors", {})
+    except Exception:
+        jira_errors = {}
+
+    # Identify state/permission failures from dynamic identity mappings
+    state_failure_keys = {"assignee", "reporter"}
+
+    if any(k in jira_errors for k in state_failure_keys):
+        task_logger.error(f"Dynamic state mapping rejected by Jira (DLQ): {jira_errors}")
+
+        ctx.session.add(
+            SyncAuditLog(
+                pf_task_id=task_id,
+                operation=SyncOperation.ERROR,
+                details=json.dumps(
+                    {
+                        "error_type": "Identity Mapping Failure",
+                        "jira_rejection": jira_errors,
+                        "action": "payload_dropped_to_dlq",
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        )
+        await ctx.session.commit()
+        ctx.stats["skipped"] += 1
+        return True
+
+    # Otherwise, assume structural schema drift (The 400 Trap)
+    project = jira_payload["fields"]["project"]["key"]
+    issuetype = jira_payload["fields"]["issuetype"]["id"]
+    cache_key = f"jira:createmeta:{project}:{issuetype}"
+
+    task_logger.warning(f"Jira HTTP 400. Suspected schema drift. Purging cache: {cache_key}. Errors: {jira_errors}")
+    await ctx.redis_client.delete(cache_key)
+
+    # Defers the task for 5 seconds. The retry will fetch the fresh schema,
+    # fail Pass 3 validation, and cleanly trip the SchemaValidationError block.
+    raise Retry(defer=5) from e
+
+
 async def _process_single_task(task: dict[str, Any], ctx: SyncContext) -> None:
     """Evaluates and synchronizes a single PeopleForce task against the Jira state matrix.
 
@@ -363,16 +407,8 @@ async def _process_single_task(task: dict[str, Any], ctx: SyncContext) -> None:
         return
 
     # Extract Base Task Context
-    raw_title = task.get("title", f"Task {task_id}")
-    assoc_name = task.get("associated_to", {}).get("full_name")
 
-    task_ctx = TaskContext(
-        raw=task,
-        id=task_id,
-        is_completed=task.get("completed", False),
-        hash=_compute_hash(task),
-        summary=f"[PF] {raw_title} - {assoc_name}" if assoc_name else f"[PF] {raw_title}",
-    )
+    task_ctx = TaskContext(raw=task, id=task_id, is_completed=task.get("completed", False), hash=_compute_hash(task))
 
     lock_key = f"lock:pf_jira:task:{task_id}"
 
@@ -409,18 +445,11 @@ async def _process_single_task(task: dict[str, Any], ctx: SyncContext) -> None:
                         await _handle_issue_update(ctx, task_ctx, jira_payload, state_record)
 
                 except httpx.HTTPStatusError as e:
-                    # Reactive Cache Invalidation (The 400 Trap)
+                    # Reactive Cache Invalidation & DLQ Routing (The 400 Trap)
                     if e.response.status_code == status.HTTP_400_BAD_REQUEST:
-                        project = jira_payload["fields"]["project"]["key"]
-                        issuetype = jira_payload["fields"]["issuetype"]["id"]
-                        cache_key = f"jira:createmeta:{project}:{issuetype}"
-
-                        task_logger.warning(f"Jira HTTP 400. Suspected schema drift. Purging cache: {cache_key}")
-                        await ctx.redis_client.delete(cache_key)
-
-                        # Defers the task for 5 seconds. The retry will fetch the fresh schema,
-                        # fail Pass 3 validation, and cleanly trip the SchemaValidationError block.
-                        raise Retry(defer=5) from e
+                        is_dlq = await _handle_jira_400_bad_request(e, ctx, task_id, jira_payload, task_logger)
+                        if is_dlq:
+                            return
                     raise
 
                 await ctx.session.commit()

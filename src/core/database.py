@@ -16,7 +16,8 @@ DATABASE_URL = f"sqlite+aiosqlite:///{settings.SQLITE_DB_PATH}"
 # Engine configuration with generous timeout for concurrent writers
 engine: AsyncEngine = create_async_engine(
     DATABASE_URL,
-    echo=settings.DEBUG,
+    echo=False,
+    future=True,
     connect_args={
         "check_same_thread": False,
         "timeout": 30.0,  # CRITICAL: 30s busy timeout for concurrent multi-process writes

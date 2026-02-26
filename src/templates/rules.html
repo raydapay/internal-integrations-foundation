@@ -44,6 +44,12 @@
         hx-swap="beforeend">
     <span>Add Routing Rule</span>
     </button>
+
+    <button class="button is-info is-light ml-2" onclick="document.getElementById('schema-helper-modal').classList.add('is-active')">
+        <span class="icon is-small">ℹ️</span>
+        <span>View PF Variables Reference</span>
+    </button>
+    <div class="box mt-5" style="overflow-x: auto;">
     {% endif %}
 
     <div class="box mt-5" style="overflow-x: auto;">
@@ -51,13 +57,15 @@
         <table class="table is-fullwidth is-striped is-hoverable is-narrow">
             <thead>
                 <tr>
+                    <th class="has-text-grey-light" style="width: 50px;">ID</th>
                     <th class="has-text-grey-light">Status</th>
                     <th class="has-text-grey-light">Priority</th>
                     <th class="has-text-grey-light">Action</th>
                     <th class="has-text-grey-light">Condition: Assignee</th>
                     <th class="has-text-grey-light">Condition: Title</th>
                     <th class="has-text-grey-light">Target Project</th>
-                    <th class="has-text-grey-light">Dynamic Field Mappings</th> <th class="has-text-grey-light has-text-right">Actions</th>
+                    <th class="has-text-grey-light">Dynamic Field Mappings</th>
+                    <th class="has-text-grey-light has-text-right">Actions</th>
                 </tr>
             </thead>
             <tbody id="rules-tbody">
@@ -67,5 +75,13 @@
     </div>
 
     <div id="modal-container"></div>
+</div>
+        </table>
+    </div>
+
+    <div id="modal-container"></div>
+
+    {% include "partials/_pf_schema_modal.html" %}
+
 </div>
 {% endblock %}

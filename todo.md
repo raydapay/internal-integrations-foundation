@@ -11,7 +11,7 @@
 - [x] **Reactive Cache Invalidation (The 400 Trap):** Wrapped issue mutation in an HTTP 400 interceptor to surgically purge stale Redis `createmeta` cache keys and trigger self-healing ARQ retries.
 - [x] **Rule Editing:** Implement a Bulma modal containing an HTMX-powered form to edit existing rules without deletion/recreation.
 
-- [x] **UI Enhancement:** Upgrade the "Select Jira Board" HTML `<select>` into a live-filterable searchable dropdown. *(Note: Custom Vanilla JS wrapper rejected. Evaluate robust, dependency-light alternatives like Tom Select or a native Bulma extension).*
+- [ ] **UI Enhancement:** Upgrade the "Select Jira Board" HTML `<select>` into a live-filterable searchable dropdown. *(Note: Custom Vanilla JS wrapper rejected. Evaluate robust, dependency-light alternatives like Tom Select or a native Bulma extension).*
 
 ## 2. Platform Architecture (Dynamic State & Plugin Pivot)
 - [x] **Configuration Data Model:** Create a `DomainConfig` SQLite table to hold the Master Switch, Polling Interval, and Fallback Projects, isolating mutable state from `settings.py`.
@@ -36,5 +36,5 @@
 - [x] **Architectural Decision Records (ADR):** Created `07-OBSERVABILITY_AND_CIRCUIT_BREAKING.md` detailing the proactive schema validation, the 400 Trap, and the Notification Matrix.
 
 ## 5. Configuration Maturity & De-Hardcoding
-- [ ] **Externalize Integration Lineage:** Expand `DomainConfig` to own integration-specific identifiers (e.g., `jira_tracking_label`, `jira_entity_property_key`), removing hardcoded "PeopleForce" magic strings from the ARQ workers and JQL reverse-vector sweeps.
-- [ ] **String Templating Engine (PF-Variables):** Introduce `MappingSourceType.TEMPLATE` to `RuleFieldMapping`. Implement regex-based JSONPath interpolation (e.g., `{{ path.to.variable }}`) in the `FieldDataResolver` to construct dynamic Jira text fields (Summary, Description) without Python-level hardcoding.
+- [x] **Externalize Integration Lineage:** Expand `DomainConfig` to own integration-specific identifiers (e.g., `jira_tracking_label`, `jira_entity_property_key`), removing hardcoded "PeopleForce" magic strings from the ARQ workers and JQL reverse-vector sweeps.
+- [x] **String Templating Engine (PF-Variables):** Introduce `MappingSourceType.TEMPLATE` to `RuleFieldMapping`. Implement regex-based JSONPath interpolation (e.g., `{{ path.to.variable }}`) in the `FieldDataResolver` to construct dynamic Jira text fields (Summary, Description) without Python-level hardcoding.

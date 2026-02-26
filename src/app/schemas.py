@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from fastapi import Form, Query
+from pydantic import BaseModel, ConfigDict
 
 from src.domain.pf_jira.models import RoutingAction
 
@@ -43,3 +44,63 @@ class UserProvisionForm:
 
     email: str = Form(...)
     role: str = Form(...)
+
+
+class PFUserReference(BaseModel):
+    """Standardized nested user object returned by PeopleForce."""
+
+    id: int
+    full_name: str
+    email: str | None = None
+    type: str | None = None
+
+
+class PeopleForceTaskPayload(BaseModel):
+    """Immutable representation of the PeopleForce Task JSON payload.
+
+    Acts as the single source of truth for payload structure and provides
+    example schemas for dynamic UI rendering in the Admin dashboard.
+    """
+
+    id: int
+    type: str
+    title: str
+    starts_on: str | None = None
+    ends_on: str | None = None
+    completed_at: str | None = None
+    completed: bool
+    description: str | None = None
+    description_plain: str | None = None
+    assigned_to: PFUserReference | None = None
+    associated_to: PFUserReference | None = None
+    created_by: PFUserReference | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "id": 7654321,
+                    "type": "Tasks::General",
+                    "title": "Nice task title",
+                    "starts_on": "2026-02-27",
+                    "ends_on": None,
+                    "completed_at": None,
+                    "completed": False,
+                    "description": "Rich HTML text with <a href=...>links</a>",
+                    "description_plain": "Plain text fallback",
+                    "assigned_to": {"id": 123456, "full_name": "Jane Doe", "email": "jane@example.com"},
+                    "associated_to": {
+                        "id": 123458,
+                        "type": "Employee",
+                        "full_name": "Bobby Smith",
+                        "email": "bobby@example.com",
+                    },
+                    "created_by": {"id": 123457, "full_name": "John Doe", "email": "john@example.com"},
+                    "created_at": "2026-02-23T10:40:50.361Z",
+                    "updated_at": "2026-02-23T10:41:34.362Z",
+                }
+            ]
+        }
+    )

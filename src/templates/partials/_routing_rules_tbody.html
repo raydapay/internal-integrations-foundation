@@ -1,40 +1,50 @@
 {% set rule_list = routing_rules if routing_rules is defined else rules %}
 
+{% set known_fields = {
+    'assignee': 'Assignee',
+    'reporter': 'Reporter',
+    'duedate': 'Due Date',
+    'customfield_10015': 'Start Date',
+    'labels': 'Labels',
+    'priority': 'Priority',
+    'components': 'Components'
+} %}
+
 {% for rule in rule_list %}
 <tr>
-    <td>
+    <td class="is-vcentered has-text-grey has-text-weight-bold">#{{ rule.id }}</td>
+
+    <td class="is-vcentered">
         {% if rule.is_active %}
-        <span class="is-success ">✅</span>
-            <!-- <span class="tag is-success">Active</span> -->
+            <span class="is-success" title="Active">✅</span>
         {% else %}
-            <span class="is-danger">❌</span>
-            <!-- <span class="tag is-danger">Disabled</span> -->
+            <span class="is-danger" title="Disabled">❌</span>
         {% endif %}
     </td>
+
     <td class="is-vcentered has-text-weight-bold">{{ rule.priority }}</td>
 
     <td class="is-vcentered">
-        {% if rule.action.value == 'SYNC' or rule.action == 'SYNC' %}
-            <button class="button is-small is-success is-outlined">SYNC</button>
+        {% if rule.action.value | string | upper == 'SYNC' %}
+            <span class="tag is-success is-light">SYNC</span>
         {% else %}
-            <button class="button is-small is-success is-outlined">DROP</button>
+            <span class="tag is-danger is-light">DROP</span>
         {% endif %}
     </td>
 
     <td class="is-vcentered">
         {% if rule.condition_assignee_pattern %}
-            <button class="button is-small is-info is-outlined">{{ rule.condition_assignee_pattern }}</button>
-            <!-- <span class="tag is-info ">{{ rule.condition_assignee_pattern }}</span> -->
+            <span class="tag is-info is-light">{{ rule.condition_assignee_pattern }}</span>
         {% else %}
-            <span class="has-text-grey">ANY</span>
+            <span class="has-text-grey is-size-7">ANY</span>
         {% endif %}
     </td>
 
     <td class="is-vcentered">
         {% if rule.condition_title_keyword %}
-            <span class="tag is-link ">{{ rule.condition_title_keyword }}</span>
+            <span class="tag is-link is-light">{{ rule.condition_title_keyword }}</span>
         {% else %}
-            <span class="has-text-grey">ANY</span>
+            <span class="has-text-grey is-size-7">ANY</span>
         {% endif %}
     </td>
 
@@ -45,23 +55,29 @@
     <td class="is-vcentered">
         <div class="tags are-small mb-0">
             {% for mapping in rule.field_mappings %}
-                {% if mapping.jira_field_id == 'issuetype' %}
-                    <span class="tag is-info is-themed" title="Issue Type">
+
+                {% if mapping.jira_field_id in ['summary', 'description'] %}
+                    {# Silently skipped #}
+
+                {% elif mapping.jira_field_id == 'issuetype' %}
+                    <span class="tag is-info is-light" title="Issue Type">
                         {{ issuetype_map.get(mapping.source_value, mapping.source_value) if issuetype_map else mapping.source_value }}
                     </span>
-                {% elif mapping.source_type.value | string | upper == 'PF_PAYLOAD' or mapping.source_type | string | upper == 'PF_PAYLOAD' %}
-                    <span class="tag is-warning" title="Dynamic Extraction">
-                        {{ mapping.jira_field_id }}: {{ mapping.source_value }}
-                    </span>
-                {% elif mapping.source_type.value | string | upper == 'TEMPLATE' or mapping.source_type | string | upper == 'TEMPLATE' %}
-                    <span class="tag is-primary is-light" title="String Template">
-                        {{ mapping.jira_field_id }}: {{ mapping.source_value }}
-                    </span>
+
                 {% else %}
-                    <span class="tag" title="Static Override">
-                        {{ mapping.jira_field_id }}: {{ mapping.source_value }}
-                    </span>
+                    {% set field_name = known_fields.get(mapping.jira_field_id, mapping.jira_field_id) %}
+
+                    {% if mapping.source_type.value | string | upper == 'PF_PAYLOAD' or mapping.source_type | string | upper == 'PF_PAYLOAD' %}
+                        <span class="tag is-warning is-light" title="Extraction: {{ mapping.source_value }}" style="cursor: help;">
+                            {{ field_name | capitalize }}
+                        </span>
+                    {% else %}
+                        <span class="tag is-primary is-light" title="Template: {{ mapping.source_value }}" style="cursor: help;">
+                            {{ field_name | capitalize }}
+                        </span>
+                    {% endif %}
                 {% endif %}
+
             {% else %}
                 <span class="has-text-grey is-italic is-size-7">No mappings configured</span>
             {% endfor %}
@@ -69,17 +85,17 @@
     </td>
 
     <td class="is-vcentered has-text-right">
-        <div class="buttons is-right">
-            <button class="button is-small is-info is-outlined"
+        <div class="buttons is-right are-small is-flex-nowrap">
+            <button class="button is-info is-outlined"
                     hx-get="/admin/rules/routing/{{ rule.id }}/edit"
                     hx-target="body"
                     hx-swap="beforeend">
-                &#128393;
+                &#128393; Edit
             </button>
 
-            <button class="button is-small is-danger is-outlined"
+            <button class="button is-danger is-outlined"
                     hx-delete="/admin/rules/routing/{{ rule.id }}"
-                    hx-confirm="Are you sure you want to delete this rule?"
+                    hx-confirm="Are you sure you want to delete Rule #{{ rule.id }}?"
                     hx-target="closest tr"
                     hx-swap="outerHTML">
                 Delete
@@ -89,7 +105,7 @@
 </tr>
 {% else %}
 <tr>
-    <td colspan="7" class="has-text-centered has-text-grey py-5">
+    <td colspan="9" class="has-text-centered has-text-grey py-5">
         No routing rules configured.
     </td>
 </tr>

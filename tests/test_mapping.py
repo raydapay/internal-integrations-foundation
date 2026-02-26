@@ -1,6 +1,6 @@
 from unittest.mock import AsyncMock
 
-from src.domain.pf_jira.mapping import build_adf_description, evaluate_routing_rules
+from src.domain.pf_jira.mapping import evaluate_routing_rules
 from src.domain.pf_jira.models import MappingSourceType, RoutingAction, RoutingRule, RuleFieldMapping
 from tests.base import BaseTest
 
@@ -52,20 +52,3 @@ class TestMappingEngine(BaseTest):
             task_c = {"title": "Welcome aboard", "assigned_to": {"email": "new.hire@todapay.com"}}
             action_c, _ = await evaluate_routing_rules(session, task_c, mock_resolver)
             self.assertEqual(action_c, RoutingAction.DROP)
-
-    def test_build_adf_description(self) -> None:
-        """Verifies the strict Atlassian Document Format (ADF) AST generation."""
-        task = {
-            "description_plain": "Please setup the workstation.",
-            "starts_on": "2023-10-01",
-            "associated_to": {"full_name": "Alice Smith"},
-        }
-
-        adf = build_adf_description(task)
-
-        self.assertEqual(adf["type"], "doc")
-        self.assertEqual(adf["version"], 1)
-        self.assertEqual(adf["content"][0]["content"][0]["text"], "Please setup the workstation.")
-
-        metadata_block = adf["content"][2]["content"]
-        self.assertEqual(metadata_block[1]["text"], "Subject: Alice Smith\n")

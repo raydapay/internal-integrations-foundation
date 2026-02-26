@@ -1,90 +1,111 @@
-{% if required_fields %}
-<div class="mb-5">
-    <h4 class="title is-6 has-text-grey-dark border-bottom pb-2">Required Jira Fields</h4>
-    <div class="columns is-multiline">
-        {% for field_id, meta in required_fields %}
-        <div class="column is-4">
-            <div class="field">
-                <label class="label is-small">
-                    {{ meta.name }} <span class="has-text-danger" title="Required">*</span>
-                </label>
-                <div class="control">
-                    {% if meta.allowedValues %}
-                        <div class="select is-fullwidth is-small">
-                            <select name="mapping_{{ field_id }}" required>
-                                <option value="" disabled {% if not existing_mappings or not existing_mappings.get(field_id) %}selected{% endif %}>-- Select --</option>
-                                {% for opt in meta.allowedValues %}
-                                    {% set opt_val = (opt.id | default(opt.value)) | string %}
-                                    <option value="{{ opt_val }}" {% if existing_mappings and existing_mappings.get(field_id) == opt_val %}selected{% endif %}>
-                                        {{ opt.name | default(opt.value) }}
-                                    </option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                    {% else %}
-                        <input class="input is-small" type="text"
-                            name="mapping_{{ field_id }}"
-                            value="{{ existing_mappings.get(field_id, '') if existing_mappings else '' }}"
-                            {% if meta.schema.type == 'array' %}
-                            placeholder="val1, val2 or $.path or {{ template }}"
-                            {% else %}
-                            placeholder="Static, $.path, or {{ template }}"
-                            {% endif %}
-                            {% if meta.required %}required{% endif %}>
-                    {% endif %}
+{% set all_fields = required_fields + optional_fields %}
+{% set core_ids = ['summary', 'description'] %}
+
+{% macro render_field(field_id, meta, width_class, existing_mappings) %}
+<div class="column {{ width_class }}">
+    <div class="field">
+        <label class="label is-small">
+            {{ meta.name }}
+            {% if meta.required %}<span class="has-text-danger" title="Required">*</span>{% endif %}
+            {% if not meta.required %}<span class="has-text-grey font-weight-normal is-size-7">({{ meta.schema.type }})</span>{% endif %}
+        </label>
+        <div class="control">
+            {% set current_val = existing_mappings.get(field_id, '') if existing_mappings else '' %}
+
+            {% if not current_val %}
+                {% if field_id == 'summary' %}
+                    {% set current_val = '[PF] {{ title }} - {{ associated_to.full_name }}' %}
+                {% elif field_id == 'description' %}
+                    {% set current_val %}{% raw %}*PeopleForce Metadata*
+Subject: {{ title }} - {{ associated_to.full_name }}
+Deadline: {{ ends_on }}
+
+{{ description_plain }}{% endraw %}{% endset %}
+                {% elif field_id == 'assignee' %}
+                    {% set current_val = '{{ assigned_to.email }}' %}
+                {% elif field_id == 'reporter' %}
+                    {% set current_val = '{{ created_by.email }}' %}
+                {% elif field_id == 'duedate' %}
+                    {% set current_val = '{{ ends_on }}' %}
+                {% endif %}
+            {% endif %}
+
+            {% if meta.allowedValues %}
+                <div class="select is-fullwidth is-small">
+                    <select name="mapping_{{ field_id }}" {% if meta.required %}required{% endif %}>
+                        <option value="" {% if not current_val %}selected{% endif %} {% if meta.required %}disabled{% endif %}>
+                            {% if meta.required %}-- Select --{% else %}-- Not Set --{% endif %}
+                        </option>
+                        {% for opt in meta.allowedValues %}
+                            {% set opt_val = (opt.id | default(opt.value)) | string %}
+                            <option value="{{ opt_val }}" {% if current_val == opt_val %}selected{% endif %}>
+                                {{ opt.name | default(opt.value) }}
+                            </option>
+                        {% endfor %}
+                    </select>
                 </div>
-                <p class="help is-marginless" style="opacity: 0.7;">ID: <code>{{ field_id }}</code></p>
-            </div>
+            {% elif field_id == 'description' %}
+                <textarea class="textarea is-small"
+                          name="mapping_{{ field_id }}"
+                          rows="6"
+                          style="width: 100%; max-width: 100%; min-width: 100%; resize: vertical;"
+                          placeholder="Static value or {{ '{{ path }}' }}"
+                          {% if meta.required %}required{% endif %}>{{ current_val }}</textarea>
+            {% else %}
+                <input class="input is-small" type="text"
+                    name="mapping_{{ field_id }}"
+                    value="{{ current_val }}"
+                    {% if meta.schema.type == 'array' %}
+                    placeholder="val1, val2 or {{ '{{ path }}' }}"
+                    {% else %}
+                    placeholder="Static value or {{ '{{ path }}' }}"
+                    {% endif %}
+                    {% if meta.required %}required{% endif %}>
+            {% endif %}
         </div>
+        <p class="help is-marginless" style="opacity: 0.7;">ID: <code>{{ field_id }}</code></p>
+    </div>
+</div>
+{% endmacro %}
+
+
+<div class="mb-5">
+    <h4 class="title is-6 has-text-grey-dark border-bottom pb-2 mb-3">Core Content</h4>
+    <div class="columns is-multiline">
+        {% for target_id in core_ids %}
+            {% for field_id, meta in all_fields %}
+                {% if field_id == target_id %}
+                    {{ render_field(field_id, meta, 'is-12', existing_mappings) }}
+                {% endif %}
+            {% endfor %}
+        {% endfor %}
+    </div>
+</div>
+
+{% set other_required = required_fields | rejectattr('0', 'in', core_ids) | list %}
+{% if other_required %}
+<div class="mb-5">
+    <h4 class="title is-6 has-text-grey-dark border-bottom pb-2 mb-3">Required Jira Fields</h4>
+    <div class="columns is-multiline">
+        {% for field_id, meta in other_required %}
+            {{ render_field(field_id, meta, 'is-4', existing_mappings) }}
         {% endfor %}
     </div>
 </div>
 {% endif %}
 
-{% if optional_fields %}
-<details class="message">
+{% set other_optional = optional_fields | rejectattr('0', 'in', core_ids) | list %}
+{% if other_optional %}
+<details class="message is-small">
     <summary class="message-header is-clickable" style="cursor: pointer;">
-        <p>Configure Optional Fields ({{ optional_fields|length }})</p>
+        <p>Configure Optional Fields ({{ other_optional|length }})</p>
         <span class="icon is-small"><i class="fas fa-sliders-h"></i></span>
     </summary>
 
     <div class="message-body p-4">
         <div class="columns is-multiline">
-            {% for field_id, meta in optional_fields %}
-            <div class="column is-3">
-                <div class="field">
-                    <label class="label is-small">
-                        {{ meta.name }}
-                        <span class="has-text-grey font-weight-normal is-size-7">({{ meta.schema.type }})</span>
-                    </label>
-                    <div class="control">
-                        {% if meta.allowedValues %}
-                            <div class="select is-fullwidth is-small">
-                                <select name="mapping_{{ field_id }}">
-                                    <option value="" {% if not existing_mappings or not existing_mappings.get(field_id) %}selected{% endif %}>-- Not Set --</option>
-                                    {% for opt in meta.allowedValues %}
-                                        {% set opt_val = (opt.id | default(opt.value)) | string %}
-                                        <option value="{{ opt_val }}" {% if existing_mappings and existing_mappings.get(field_id) == opt_val %}selected{% endif %}>
-                                            {{ opt.name | default(opt.value) }}
-                                        </option>
-                                    {% endfor %}
-                                </select>
-                            </div>
-                        {% else %}
-                            <input class="input is-small" type="text"
-                                name="mapping_{{ field_id }}"
-                                value="{{ existing_mappings.get(field_id, '') if existing_mappings else '' }}"
-                                {% if meta.schema.type == 'array' %}
-                                placeholder="val1, val2 or $.path"
-                                {% else %}
-                                placeholder="Static value or $.path"
-                                {% endif %}
-                                {% if meta.required %}required{% endif %}>
-                        {% endif %}
-                    </div>
-                    <p class="help is-marginless" style="opacity: 0.7;">ID: <code>{{ field_id }}</code></p>
-                </div>
-            </div>
+            {% for field_id, meta in other_optional %}
+                {{ render_field(field_id, meta, 'is-4', existing_mappings) }}
             {% endfor %}
         </div>
     </div>

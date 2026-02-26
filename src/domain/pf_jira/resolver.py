@@ -221,47 +221,79 @@ class FieldDataResolver:
 
         return parsed_schema
 
+    def _validate_allowed_values(self, value: Any, field_schema: dict[str, Any], field_id: str) -> None:
+        """Validates if the provided value matches Jira's allowed values for the field."""
+        if "allowedValues" not in field_schema:
+            return
+
+        allowed = field_schema["allowedValues"]
+        allowed_ids = {str(opt.get("id")) for opt in allowed if opt.get("id")}
+        allowed_values = {str(opt.get("value")) for opt in allowed if opt.get("value")}
+        str_val = str(value)
+
+        if str_val not in allowed_ids and str_val not in allowed_values:
+            valid_options = ", ".join(allowed_values)
+            raise SchemaValidationError(
+                f"Value '{str_val}' is invalid for restricted field '{field_id}'. Valid options are: {valid_options}"
+            )
+
+    def _format_doc(self, value: Any) -> dict[str, Any]:
+        """Formats text into an Atlassian Document Format (ADF) object."""
+        safe_text = str(value) if value is not None else ""
+        paragraphs = []
+        for line in safe_text.split("\n"):
+            clean_line = line.strip()
+            paragraphs.append(
+                {"type": "paragraph", "content": [{"text": clean_line, "type": "text"}] if clean_line else []}
+            )
+        return {"version": 1, "type": "doc", "content": paragraphs}
+
+    def _format_date(self, value: Any) -> str | None:
+        """Formats dates, strictly casting missing values to explicit JSON nulls."""
+        if value is None or str(value).strip().lower() in ("", "none", "null"):
+            return None
+        return str(value).strip()
+
+    async def _format_user(self, value: Any) -> dict[str, str] | None:
+        """Resolves an email or ID string into a Jira Account ID object."""
+        if not value:
+            return None
+        account_id = await self._resolve_account_id(str(value).strip())
+        return {"id": account_id} if account_id else None
+
+    def _format_array(self, value: Any) -> Any:
+        """Parses comma-separated strings or lists into an array of strings."""
+        if isinstance(value, str):
+            return [v.strip() for v in value.split(",")]
+        if isinstance(value, list):
+            return [str(v) for v in value]
+        return value
+
     async def _transform_value(self, value: Any, field_schema: dict[str, Any], field_id: str) -> Any:
-        """Casts the raw value to the exact structural format required by Jira's REST API.
+        """Casts the raw value to the exact structural format required by Jira's REST API."""
 
-        Args:
-            value: The raw extracted value.
-            field_schema: The specific Jira field schema definition.
-            field_id: The Jira field ID being transformed.
+        # 1. Proactive Domain Constraint Validation
+        self._validate_allowed_values(value, field_schema, field_id)
 
-        Returns:
-            Any: The transformed payload object compliant with Jira API.
-        """
         schema_type = field_schema.get("schema", {}).get("type")
 
-        # Proactive Domain Constraint Validation (allowedValues mismatch)
-        if "allowedValues" in field_schema:
-            allowed = field_schema["allowedValues"]
-            # Support resolution by either native Atlassian ID or string value
-            allowed_ids = {str(opt.get("id")) for opt in allowed if opt.get("id")}
-            allowed_values = {str(opt.get("value")) for opt in allowed if opt.get("value")}
-            str_val = str(value)
+        # 2. Type Dispatcher
+        if schema_type == "doc" or field_id == "description":
+            return self._format_doc(value)
 
-            if str_val not in allowed_ids and str_val not in allowed_values:
-                valid_options = ", ".join(allowed_values)
-                raise SchemaValidationError(
-                    f"Value '{str_val}' is invalid for restricted field '{field_id}'. "
-                    f"Valid options are: {valid_options}"
-                )
+        if schema_type in ("date", "datetime"):
+            return self._format_date(value)
 
         if schema_type == "user":
-            account_id = await self._resolve_account_id(str(value))
-            return {"id": account_id}
+            return await self._format_user(value)
 
         if schema_type == "array" and field_schema.get("schema", {}).get("items") == "string":
-            if isinstance(value, str):
-                return [v.strip() for v in value.split(",")]
-            if isinstance(value, list):
-                return [str(v) for v in value]
+            return self._format_array(value)
 
         if schema_type == "option":
             return {"value": str(value)}
 
+        # 3. Default Fallback
         return value
 
     async def _resolve_account_id(self, email: str) -> str:
