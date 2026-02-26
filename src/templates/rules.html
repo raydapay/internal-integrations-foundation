@@ -38,120 +38,12 @@
         <div id="validation-container" class="mt-3"></div>
     </div>
 
-    <details class="box mb-5" style="cursor: pointer;">
-        <summary class="title is-5 mb-0" style="outline: none;">
-            <span class="icon"><i class="fas fa-plus-circle"></i></span> Add Routing Rule
-        </summary>
-
-        <div class="mt-4" style="cursor: default;">
-            <p class="is-size-7 mb-4">Rules are evaluated in ascending priority order. An empty condition acts as a wildcard.</p>
-
-            <form hx-post="/admin/rules/routing" hx-target="#rules-tbody" hx-swap="innerHTML">
-                <div class="columns">
-                    <div class="column is-2">
-                        <div class="field">
-                            <label class="label">Priority</label>
-                            <div class="control">
-                                <input class="input" type="number" name="priority" value="100" required>
-                            </div>
-                        </div>
-                        <div class="field mt-4">
-                            <label class="label">Action</label>
-                            <div class="control">
-                                <div class="select is-fullwidth">
-                                    <select name="action">
-                                        <option value="SYNC">SYNC</option>
-                                        <option value="DROP">DROP</option>
-                                    </select>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="column is-4">
-                        <h4 class="title is-6 mb-2">Conditions (IF)</h4>
-                        <div class="field">
-                            <label class="label is-small">Assignee Email Contains</label>
-                            <div class="control">
-                                <input class="input is-small" type="text" name="condition_assignee_pattern" placeholder="@it.todapay.com">
-                            </div>
-                        </div>
-                        <div class="field">
-                            <label class="label is-small">Task Title Contains</label>
-                            <div class="control">
-                                <input class="input is-small" type="text" name="condition_title_keyword" placeholder="onboarding">
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="column is-6">
-                        <h4 class="title is-6 mb-2">Mutations (THEN)</h4>
-
-                        <div class="columns is-multiline is-variable is-1 mb-0">
-                            <div class="column is-half pb-0">
-                                <div class="field">
-                                    <label class="label is-small">Target Jira Project</label>
-                                    <div class="control">
-                                        <select name="target_jira_project" class="tom-select-init" placeholder="-- No Change --">
-                                            <option value="">-- No Change --</option>
-                                            {% for p in jira_projects %}
-                                            <option value="{{ p.key }}">{{ p.name }} ({{ p.key }})</option>
-                                            {% endfor %}
-                                        </select>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="column is-half pb-0">
-                                <div class="field">
-                                    <label class="label is-small">Jira Task Type</label>
-                                    <div class="control">
-                                        <select name="target_jira_task_type" class="tom-select-init" placeholder="-- No Change --">
-                                            <option value="">-- No Change --</option>
-                                            {% for tt in jira_task_types %}
-                                            <option value="{{ tt }}">{{ tt }}</option>
-                                            {% endfor %}
-                                        </select>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="column is-half py-2">
-                                <div class="field">
-                                    <label class="label is-small">Inject Labels</label>
-                                    <div class="control">
-                                        <input class="input is-small " type="text" name="target_jira_labels" placeholder="comma, separated, labels">
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="column is-half pt-0">
-                                <div class="field">
-                                    <label class="label is-small">Override Assignee Email</label>
-                                    <div class="control">
-                                        <input class="input is-small" type="email" name="target_assignee_email" placeholder="jane.doe@todapay.com">
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="column is-half pt-0">
-                                <div class="field">
-                                    <label class="label is-small">Override Reporter Email</label>
-                                    <div class="control">
-                                        <input class="input is-small" type="email" name="target_reporter_email" placeholder="hr.bot@todapay.com">
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="field is-grouped mt-4">
-                    <div class="control">
-                        <button type="submit" class="button is-link is-small">Add Rule</button>
-                    </div>
-                </div>
-            </form>
-        </div>
-    </details>
+    <button class="button is-primary"
+        hx-get="/admin/rules/routing/new"
+        hx-target="body"
+        hx-swap="beforeend">
+    <span>Add Routing Rule</span>
+    </button>
     {% endif %}
 
     <div class="box mt-5" style="overflow-x: auto;">
@@ -159,17 +51,13 @@
         <table class="table is-fullwidth is-striped is-hoverable is-narrow">
             <thead>
                 <tr>
-                    <th>Priority</th>
-                    <th>Action</th>
-                    <th>Condition: Assignee</th>
-                    <th>Condition: Title</th>
-                    <th>Target: Project</th>
-                    <th>Target: Task Type</th>
-                    <th>Target: Labels</th>
-                    <th>Overrides</th>
-                    {% if user.role in ['system_admin', 'pf_jira_admin'] %}
-                    <th>Actions</th>
-                    {% endif %}
+                    <th class="has-text-grey-light">Status</th>
+                    <th class="has-text-grey-light">Priority</th>
+                    <th class="has-text-grey-light">Action</th>
+                    <th class="has-text-grey-light">Condition: Assignee</th>
+                    <th class="has-text-grey-light">Condition: Title</th>
+                    <th class="has-text-grey-light">Target Project</th>
+                    <th class="has-text-grey-light">Dynamic Field Mappings</th> <th class="has-text-grey-light has-text-right">Actions</th>
                 </tr>
             </thead>
             <tbody id="rules-tbody">

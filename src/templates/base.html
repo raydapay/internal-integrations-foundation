@@ -21,6 +21,12 @@
         }
         .log-error { color: var(--bulma-danger); font-weight: bold; }
         .log-info { color: var(--bulma-primary); }
+        /* Define a tag that uses the 'on-scheme' colors */
+        .tag.is-themed {
+            background-color: var(--bulma-background);
+            color: var(--bulma-text);
+            border: 1px solid var(--bulma-border);
+        }
 
         /* Toast Container */
         #toast-container { position: fixed; top: 20px; right: 20px; z-index: 9999; max-width: 400px;}

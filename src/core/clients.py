@@ -404,6 +404,17 @@ class JiraClient(BaseClient):
             logger.error(f"Failed to add comment to {issue_id_or_key}: {response.text}")
         response.raise_for_status()
 
+    async def get_issue_type_map(self) -> dict[str, str]:
+        """Returns a mapping of Issue Type IDs to their human-readable names."""
+        try:
+            # Adjust 'self.client.get' if your internal httpx client variable is named differently
+            response = await self.client.get("/rest/api/3/issuetype")
+            response.raise_for_status()
+            return {str(it["id"]): it["name"] for it in response.json()}
+        except Exception as e:
+            logger.error(f"Failed to fetch issue type map: {e}")
+            return {}
+
     async def search_issues(self, jql: str, fields: list[str] | None = None) -> list[dict[str, Any]]:
         """Executes a JQL search and returns matching issues, handling pagination.
 

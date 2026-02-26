@@ -1,23 +1,32 @@
-<div class="modal is-active" id="edit-rule-modal">
-    <div class="modal-background" onclick="document.getElementById('edit-rule-modal').remove()"></div>
+<div class="modal is-active" id="rule-form-modal">
+    <div class="modal-background" onclick="document.getElementById('rule-form-modal').remove()"></div>
     <div class="modal-card" style="width: 800px; max-width: 95vw;">
         <header class="modal-card-head">
-            <p class="modal-card-title">Edit Routing Rule</p>
-            <button class="delete" aria-label="close" onclick="document.getElementById('edit-rule-modal').remove()"></button>
+            <p class="modal-card-title">{% if rule %}Edit{% else %}Create{% endif %} Routing Rule</p>
+            <button class="delete" aria-label="close" onclick="document.getElementById('rule-form-modal').remove()"></button>
         </header>
         <section class="modal-card-body">
-            <form id="edit-rule-form"
-                  hx-post="/admin/rules/routing/{{ rule.id }}"
-                  hx-target="#rules-tbody"
-                  hx-swap="innerHTML"
-                  hx-on::after-request="if(event.detail.successful) document.getElementById('edit-rule-modal').remove()">
+            <form id="routing-rule-form"
+      hx-post="{% if rule %}/admin/rules/routing/{{ rule.id }}{% else %}/admin/rules/routing{% endif %}"
+      hx-target="#rules-tbody"
+      hx-swap="innerHTML"
+      hx-on::after-request="if(event.detail.successful && event.detail.elt.id === 'routing-rule-form') document.getElementById('rule-form-modal').remove()">
 
                 <div class="columns is-multiline">
+                    <div class="column is-12">
+                        <div class="field">
+                            <label class="checkbox is-small has-text-weight-bold">
+                                <input type="checkbox" name="is_active" {% if not rule or rule.is_active %}checked{% endif %}>
+                                Rule is Active
+                            </label>
+                            <p class="help is-marginless" style="opacity: 0.7;">Disabled rules are bypassed during sync operations.</p>
+                        </div>
+                    </div>
                     <div class="column is-6">
                         <div class="field">
                             <label class="label is-small">Priority</label>
                             <div class="control">
-                                <input class="input is-small" type="number" name="priority" value="{{ rule.priority }}" required>
+                                <input class="input is-small" type="number" name="priority" value="{{ rule.priority if rule else 100 }}" required>
                             </div>
                         </div>
                     </div>
@@ -26,9 +35,10 @@
                             <label class="label is-small">Action</label>
                             <div class="control">
                                 <div class="select is-small is-fullwidth">
+                                    {% set current_action = rule.action.value if rule else 'SYNC' %}
                                     <select name="action">
-                                        <option value="SYNC" {% if rule.action.value == 'SYNC' %}selected{% endif %}>SYNC</option>
-                                        <option value="DROP" {% if rule.action.value == 'DROP' %}selected{% endif %}>DROP</option>
+                                        <option value="SYNC" {% if current_action == 'SYNC' %}selected{% endif %}>SYNC</option>
+                                        <option value="DROP" {% if current_action == 'DROP' %}selected{% endif %}>DROP</option>
                                     </select>
                                 </div>
                             </div>
@@ -42,7 +52,7 @@
                         <div class="field">
                             <label class="label is-small">Assignee Email Contains</label>
                             <div class="control">
-                                <input class="input is-small" type="text" name="condition_assignee_pattern" value="{{ rule.condition_assignee_pattern or '' }}">
+                                <input class="input is-small" type="text" name="condition_assignee_pattern" value="{{ rule.condition_assignee_pattern if rule and rule.condition_assignee_pattern else '' }}">
                             </div>
                         </div>
                     </div>
@@ -50,7 +60,7 @@
                         <div class="field">
                             <label class="label is-small">Task Title Contains</label>
                             <div class="control">
-                                <input class="input is-small" type="text" name="condition_title_keyword" value="{{ rule.condition_title_keyword or '' }}">
+                                <input class="input is-small" type="text" name="condition_title_keyword" value="{{ rule.condition_title_keyword if rule and rule.condition_title_keyword else '' }}">
                             </div>
                         </div>
                     </div>
@@ -64,11 +74,11 @@
                             <div class="control">
                                 <select name="target_jira_project" class="select is-fullwidth is-small" required
                                         hx-get="/admin/rules/schema/issuetypes"
-                                        hx-target="#edit-issuetype-select"
-                                        hx-indicator="#edit-schema-loading">
-                                    <option value="" disabled>-- Select Project --</option>
+                                        hx-target="#form-issuetype-select"
+                                        hx-indicator="#form-schema-loading">
+                                    <option value="" disabled {% if not rule %}selected{% endif %}>-- Select Project --</option>
                                     {% for p in jira_projects %}
-                                    <option value="{{ p.key }}" {% if rule.target_jira_project == p.key %}selected{% endif %}>{{ p.name }} ({{ p.key }})</option>
+                                    <option value="{{ p.key }}" {% if rule and rule.target_jira_project == p.key %}selected{% endif %}>{{ p.name }} ({{ p.key }})</option>
                                     {% endfor %}
                                 </select>
                             </div>
@@ -79,13 +89,18 @@
                         <div class="field">
                             <label class="label is-small">Reference Issue Type</label>
                             <div class="control">
-                                <select name="reference_issuetype" id="edit-issuetype-select" class="select is-fullwidth is-small" required
+                                <select name="reference_issuetype" id="form-issuetype-select" class="select is-fullwidth is-small" required
                                         hx-get="/admin/rules/schema/fields"
                                         hx-include="[name='target_jira_project']"
-                                        hx-target="#edit-dynamic-schema-fields"
-                                        hx-indicator="#edit-schema-loading">
-                                    {% if current_issuetype %}
-                                        <option value="{{ current_issuetype }}" selected>Issue Type ID: {{ current_issuetype }}</option>
+                                        hx-target="#form-dynamic-schema-fields"
+                                        hx-indicator="#form-schema-loading">
+                                    {% if current_project_issuetypes %}
+                                        <option value="" disabled>Select Reference Issue Type...</option>
+                                        {% for it in current_project_issuetypes %}
+                                            <option value="{{ it.id }}" {% if current_issuetype == it.id %}selected{% endif %}>{{ it.name }}</option>
+                                        {% endfor %}
+                                    {% elif current_issuetype %}
+                                        <option value="{{ current_issuetype }}" selected>{{ current_issuetype_name }}</option>
                                     {% else %}
                                         <option value="" disabled selected>Select Project First...</option>
                                     {% endif %}
@@ -94,12 +109,12 @@
                         </div>
                     </div>
 
-                    <div id="edit-schema-loading" class="htmx-indicator has-text-centered py-2 column is-12">
+                    <div id="form-schema-loading" class="htmx-indicator has-text-centered py-2 column is-12">
                         <span class="icon is-small has-text-info"><i class="fas fa-circle-notch fa-spin"></i></span>
                         <span class="is-size-7 has-text-grey">Loading schema from Jira API...</span>
                     </div>
 
-                    <div class="column is-12" id="edit-dynamic-schema-fields">
+                    <div class="column is-12" id="form-dynamic-schema-fields">
                         {% if required_fields or optional_fields %}
                             {% include "partials/_schema_fields.html" %}
                         {% else %}
@@ -112,8 +127,8 @@
             </form>
         </section>
         <footer class="modal-card-foot">
-            <button class="button is-success" type="submit" form="edit-rule-form">Save Overrides</button>
-            <button class="button" onclick="document.getElementById('edit-rule-modal').remove()">Cancel</button>
+            <button class="button is-success" type="submit" form="routing-rule-form">{% if rule %}Save Overrides{% else %}Create Rule{% endif %}</button>
+            <button class="button" onclick="document.getElementById('rule-form-modal').remove()">Cancel</button>
         </footer>
     </div>
 </div>

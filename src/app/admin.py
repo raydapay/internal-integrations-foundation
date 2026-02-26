@@ -8,20 +8,28 @@ from typing import Any
 import httpx
 import psutil
 import redis.asyncio as redis
-from arq import create_pool
-from arq.connections import RedisSettings
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
+from loguru import logger
+from sqlalchemy.orm import selectinload
 from sqlmodel import desc, or_, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from src.app.schemas import AuditQueryParams, RoutingRuleForm, UserAccessForm, UserProvisionForm
+from src.app.schemas import AuditQueryParams, UserAccessForm, UserProvisionForm
 from src.config.settings import settings
 from src.core.broadcaster import log_broadcaster
 from src.core.clients import JiraClient, NotificationClient, PeopleForceClient
 from src.core.database import get_session
-from src.domain.pf_jira.models import DomainConfig, RoutingRule, SyncAuditLog
+from src.domain.pf_jira.models import (
+    DomainConfig,
+    MappingSourceType,
+    RoutingAction,
+    RoutingRule,
+    RuleFieldMapping,
+    SyncAuditLog,
+)
+from src.domain.pf_jira.resolver import FieldDataResolver
 from src.domain.users.models import User, UserRole
 
 router = APIRouter(prefix="/admin", tags=["Admin Dashboard"])
@@ -328,13 +336,15 @@ async def rules_dashboard(
     Returns:
         HTMLResponse: The complete rendered dashboard.
     """
-    rules = (await session.exec(select(RoutingRule).order_by(RoutingRule.priority))).all()
+    # CRITICAL FIX: Eager load the field_mappings relationship to prevent async DetachedInstanceError
+    stmt = select(RoutingRule).options(selectinload(RoutingRule.field_mappings)).order_by(RoutingRule.priority)
+    rules = (await session.exec(stmt)).all()
 
     # Fetch dynamic Jira projects for the dropdown
     jira_client = JiraClient()
     # 1. Ensure you have the DomainConfig fetched
-    stmt = select(DomainConfig).where(DomainConfig.domain_name == "pf_jira")
-    config = (await session.exec(stmt)).first()
+    config_stmt = select(DomainConfig).where(DomainConfig.domain_name == "pf_jira")
+    config = (await session.exec(config_stmt)).first()
 
     # 2. Extract the field_id from config or use the migration default
     field_id = config.jira_pf_task_id_custom_field if config else "customfield_10048"
@@ -343,6 +353,7 @@ async def rules_dashboard(
     try:
         jira_projects = await jira_client.get_all_projects()
         jira_task_types = await jira_client.get_task_type_options(field_id)
+        issuetype_map = await jira_client.get_issue_type_map()
     finally:
         await jira_client.close()
 
@@ -354,6 +365,7 @@ async def rules_dashboard(
             "routing_rules": rules,
             "jira_projects": jira_projects,
             "jira_task_types": jira_task_types,
+            "issuetype_map": issuetype_map,
         },
     )
 
@@ -361,40 +373,84 @@ async def rules_dashboard(
 @router.post("/rules/routing", response_class=HTMLResponse)
 async def add_routing_rule(
     request: Request,
-    form: RoutingRuleForm = Depends(),
     session: AsyncSession = Depends(get_session),
     user: dict[str, Any] = Depends(require_pf_jira_admin),
 ) -> HTMLResponse:
-    """Creates a new priority-based routing rule and returns the updated table body.
+    """Creates a new priority-based routing rule with normalized dynamic field mappings."""
+    form_data = await request.form()
 
-    Args:
-        request: The incoming HTTP request.
-        form: The injected form payload containing routing conditions and targets.
-        session: The asynchronous database session.
-        user: The authenticated user context enforcing mutation privileges.
-
-    Returns:
-        HTMLResponse: The HTMX partial containing the updated table rows.
-    """
     new_rule = RoutingRule(
-        priority=form.priority,
-        action=form.action,
-        condition_assignee_pattern=form.condition_assignee_pattern.strip() if form.condition_assignee_pattern else None,
-        condition_title_keyword=form.condition_title_keyword.strip() if form.condition_title_keyword else None,
-        target_jira_project=form.target_jira_project.strip() if form.target_jira_project else None,
-        target_jira_task_type=form.target_jira_task_type.strip() if form.target_jira_task_type else None,
-        target_jira_labels=form.target_jira_labels.strip() if form.target_jira_labels else None,
-        target_assignee_email=form.target_assignee_email.strip() if form.target_assignee_email else None,
-        target_reporter_email=form.target_reporter_email.strip() if form.target_reporter_email else None,
+        priority=int(form_data.get("priority", 100)),
+        action=RoutingAction(form_data.get("action", "SYNC")),
+        is_active=form_data.get("is_active") == "on",
+        condition_assignee_pattern=form_data.get("condition_assignee_pattern", "").strip() or None,
+        condition_title_keyword=form_data.get("condition_title_keyword", "").strip() or None,
+        target_jira_project=form_data.get("target_jira_project", "").strip() or None,
     )
+
+    # 1. Explicitly extract and map the reference issuetype required by the resolver
+    reference_issuetype = form_data.get("reference_issuetype", "").strip()
+    if reference_issuetype:
+        new_rule.field_mappings.append(
+            RuleFieldMapping(
+                jira_field_id="issuetype", source_type=MappingSourceType.STATIC, source_value=reference_issuetype
+            )
+        )
+
+    # 2. Extract dynamically injected fields and cast source vectors
+    for key, value in form_data.items():
+        if key.startswith("mapping_") and value:
+            jira_field_id = key.replace("mapping_", "", 1)
+            val_str = str(value).strip()
+
+            if not val_str:
+                continue
+
+            source_type = MappingSourceType.PF_PAYLOAD if val_str.startswith("$.") else MappingSourceType.STATIC
+
+            new_rule.field_mappings.append(
+                RuleFieldMapping(jira_field_id=jira_field_id, source_type=source_type, source_value=val_str)
+            )
 
     session.add(new_rule)
     await session.commit()
 
-    rules = (await session.exec(select(RoutingRule).order_by(RoutingRule.priority))).all()
+    # Eager load mappings to prevent DetachedInstanceError in the Jinja2 template
+    stmt = select(RoutingRule).options(selectinload(RoutingRule.field_mappings)).order_by(RoutingRule.priority)
+    rules = (await session.exec(stmt)).all()
+    jira_client = JiraClient()
+    try:
+        issuetype_map = await jira_client.get_issue_type_map()
+    except Exception:
+        issuetype_map = {}
+    finally:
+        await jira_client.close()
+
     return templates.TemplateResponse(
-        "partials/_routing_rules_tbody.html", {"request": request, "routing_rules": rules, "user": user}
+        "partials/_routing_rules_tbody.html",
+        {"request": request, "routing_rules": rules, "user": user, "issuetype_map": issuetype_map},
     )
+
+
+def _parse_jira_schema_fields(schema: dict[str, Any]) -> tuple[list[tuple[str, Any]], list[tuple[str, Any]]]:
+    """Helper to separate and filter schema fields into required and optional lists."""
+    required_fields = []
+    optional_fields = []
+    exclude_ids = {"project", "issuetype", "attachment", "summary", "duedate", "description"}
+    exclude_names = {"Start date", "Due date"}
+
+    for field_id, meta in schema.items():
+        if field_id in exclude_ids or meta.get("name") in exclude_names:
+            continue
+        if field_id == "reporter":
+            meta["required"] = False
+
+        if meta.get("required"):
+            required_fields.append((field_id, meta))
+        else:
+            optional_fields.append((field_id, meta))
+
+    return required_fields, optional_fields
 
 
 @router.get("/rules/routing/{rule_id}/edit", response_class=HTMLResponse)
@@ -404,25 +460,62 @@ async def edit_routing_rule_modal(
     session: AsyncSession = Depends(get_session),
     user: dict[str, Any] = Depends(require_pf_jira_admin),
 ) -> HTMLResponse:
-    """Fetches a specific routing rule and returns the HTML modal for editing."""
-    rule = await session.get(RoutingRule, rule_id)
+    """Fetches a specific routing rule and computes the live Jira schema for state hydration."""
+    stmt = select(RoutingRule).where(RoutingRule.id == rule_id).options(selectinload(RoutingRule.field_mappings))
+    rule = (await session.exec(stmt)).first()
     if not rule:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Routing rule not found.")
-
-    # Fetch config to get the field_id
-    config = (await session.exec(select(DomainConfig).where(DomainConfig.domain_name == "pf_jira"))).first()
-    field_id = config.jira_pf_task_id_custom_field if config else "customfield_10048"
+        raise HTTPException(status_code=404, detail="Routing rule not found.")
 
     jira_client = JiraClient()
+    redis_pool = getattr(request.app.state, "arq_pool", None)
+    resolver = FieldDataResolver(jira_client, redis_pool)
+
+    required_fields = []
+    optional_fields = []
+    jira_projects = []
+    current_project_issuetypes = []  # <-- Initialize new list
+
+    existing_mappings = {m.jira_field_id: m.source_value for m in rule.field_mappings}
+    current_issuetype = existing_mappings.get("issuetype", "")
+
     try:
         jira_projects = await jira_client.get_all_projects()
-        jira_task_types = await jira_client.get_task_type_options(field_id)
+        issuetype_map = await jira_client.get_issue_type_map()
+
+        if rule.target_jira_project:
+            # 1. Eagerly fetch the valid issue types for this specific project
+            try:
+                resp = await jira_client.client.get(f"/rest/api/3/project/{rule.target_jira_project}")
+                resp.raise_for_status()
+                current_project_issuetypes = [
+                    it for it in resp.json().get("issueTypes", []) if not it.get("subtask", False)
+                ]
+            except Exception as e:
+                logger.error(f"Failed to fetch issue types for project {rule.target_jira_project}: {e}")
+
+            # 2. Pre-flight the schema if issuetype is already known
+            if current_issuetype:
+                schema = await resolver._get_createmeta(rule.target_jira_project, current_issuetype)
+                required_fields, optional_fields = _parse_jira_schema_fields(schema)
+
+    except Exception as e:
+        logger.error(f"Failed to load schema for edit modal: {e}")
     finally:
         await jira_client.close()
 
     return templates.TemplateResponse(
-        "partials/_edit_routing_rule_modal.html",
-        {"request": request, "rule": rule, "jira_projects": jira_projects, "jira_task_types": jira_task_types},
+        "partials/_rule_form_modal.html",
+        {
+            "request": request,
+            "rule": rule,
+            "jira_projects": jira_projects,
+            "current_issuetype": current_issuetype,
+            "current_issuetype_name": issuetype_map.get(current_issuetype, current_issuetype),
+            "current_project_issuetypes": current_project_issuetypes,  # <-- Inject into context
+            "existing_mappings": existing_mappings,
+            "required_fields": required_fields,
+            "optional_fields": optional_fields,
+        },
     )
 
 
@@ -430,47 +523,65 @@ async def edit_routing_rule_modal(
 async def update_routing_rule(
     request: Request,
     rule_id: int,
-    form: RoutingRuleForm = Depends(),
     session: AsyncSession = Depends(get_session),
     user: dict[str, Any] = Depends(require_pf_jira_admin),
 ) -> HTMLResponse:
-    """Updates an existing routing rule and returns the refreshed table body.
-
-    Args:
-        request: The incoming HTTP request.
-        rule_id: The primary key of the routing rule to update.
-        form: The injected form payload containing updated conditions and targets.
-        session: The asynchronous database session.
-        user: The authenticated user context enforcing mutation privileges.
-
-    Returns:
-        HTMLResponse: The HTMX partial containing the updated table rows.
-
-    Raises:
-        HTTPException: A 404 Not Found error if the specified routing rule does not exist.
-    """
-    rule = await session.get(RoutingRule, rule_id)
+    """Updates a routing rule, executing an atomic replacement of all associated field mappings."""
+    stmt = select(RoutingRule).where(RoutingRule.id == rule_id).options(selectinload(RoutingRule.field_mappings))
+    rule = (await session.exec(stmt)).first()
     if not rule:
         raise HTTPException(status_code=404, detail="Routing rule not found.")
 
-    rule.priority = form.priority
-    rule.action = form.action
-    rule.condition_assignee_pattern = (
-        form.condition_assignee_pattern.strip() if form.condition_assignee_pattern else None
-    )
-    rule.condition_title_keyword = form.condition_title_keyword.strip() if form.condition_title_keyword else None
-    rule.target_jira_project = form.target_jira_project.strip() if form.target_jira_project else None
-    rule.target_jira_task_type = form.target_jira_task_type.strip() if form.target_jira_task_type else None
-    rule.target_jira_labels = form.target_jira_labels.strip() if form.target_jira_labels else None
-    rule.target_assignee_email = form.target_assignee_email.strip() if form.target_assignee_email else None
-    rule.target_reporter_email = form.target_reporter_email.strip() if form.target_reporter_email else None
+    form_data = await request.form()
+
+    rule.priority = int(form_data.get("priority", 100))
+    rule.action = RoutingAction(form_data.get("action", "SYNC"))
+    rule.is_active = form_data.get("is_active") == "on"
+    rule.condition_assignee_pattern = form_data.get("condition_assignee_pattern", "").strip() or None
+    rule.condition_title_keyword = form_data.get("condition_title_keyword", "").strip() or None
+    rule.target_jira_project = form_data.get("target_jira_project", "").strip() or None
+
+    # Clear existing mappings. SQLModel `cascade="all, delete-orphan"` ensures DB integrity.
+    rule.field_mappings.clear()
+
+    reference_issuetype = form_data.get("reference_issuetype", "").strip()
+    if reference_issuetype:
+        rule.field_mappings.append(
+            RuleFieldMapping(
+                jira_field_id="issuetype", source_type=MappingSourceType.STATIC, source_value=reference_issuetype
+            )
+        )
+
+    for key, value in form_data.items():
+        if key.startswith("mapping_") and value:
+            jira_field_id = key.replace("mapping_", "", 1)
+            val_str = str(value).strip()
+
+            if not val_str:
+                continue
+
+            source_type = MappingSourceType.PF_PAYLOAD if val_str.startswith("$.") else MappingSourceType.STATIC
+
+            rule.field_mappings.append(
+                RuleFieldMapping(jira_field_id=jira_field_id, source_type=source_type, source_value=val_str)
+            )
 
     session.add(rule)
     await session.commit()
 
-    rules = (await session.exec(select(RoutingRule).order_by(RoutingRule.priority))).all()
+    stmt_all = select(RoutingRule).options(selectinload(RoutingRule.field_mappings)).order_by(RoutingRule.priority)
+    rules = (await session.exec(stmt_all)).all()
+    jira_client = JiraClient()
+    try:
+        issuetype_map = await jira_client.get_issue_type_map()
+    except Exception:
+        issuetype_map = {}
+    finally:
+        await jira_client.close()
+
     return templates.TemplateResponse(
-        "partials/_routing_rules_tbody.html", {"request": request, "routing_rules": rules, "user": user}
+        "partials/_routing_rules_tbody.html",
+        {"request": request, "routing_rules": rules, "user": user, "issuetype_map": issuetype_map},
     )
 
 
@@ -726,11 +837,10 @@ async def start_rule_validation(
     await redis_client.setex("pf_jira:validation_report", 300, json.dumps({"status": "processing"}))
     await redis_client.aclose()
 
-    # Enqueue ARQ task
-    # Enqueue ARQ task
-    arq_redis = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
-    await arq_redis.enqueue_job("validate_routing_rules_task", _queue_name="pf_jira_queue")
-    await arq_redis.aclose()
+    # CRITICAL FIX: Use the bound application pool instead of creating a transient one
+    arq_pool = getattr(request.app.state, "arq_pool", None)
+    if arq_pool:
+        await arq_pool.enqueue_job("validate_routing_rules_task", _queue_name="pf_jira_queue")
 
     return templates.TemplateResponse("partials/_validation_status.html", {"request": request, "status": "processing"})
 
@@ -756,5 +866,87 @@ async def get_validation_status(
             "status": data.get("status"),
             "details": data.get("details", []),
             "error": data.get("error"),
+        },
+    )
+
+
+@router.get("/rules/schema/issuetypes", response_class=HTMLResponse)
+async def get_project_issuetypes(request: Request, target_jira_project: str) -> HTMLResponse:
+    jira_client = JiraClient()
+    try:
+        resp = await jira_client.client.get(f"/rest/api/3/project/{target_jira_project}")
+        resp.raise_for_status()
+        issue_types = resp.json().get("issueTypes", [])
+
+        html = '<option value="" disabled selected>Select Reference Issue Type...</option>'
+        for it in issue_types:
+            if not it.get("subtask", False):
+                html += f'<option value="{it["id"]}">{it["name"]}</option>'
+
+        # Tom Select maintains an internal cache. We must explicitly clear it
+        # using its JS API when the project changes, rather than just syncing.
+        html += """
+        <script>
+            (function() {
+                var el = document.getElementById('issuetype-select');
+                if (el && el.tomselect) {
+                    el.tomselect.clearOptions();
+                    el.tomselect.sync();
+                }
+            })();
+        </script>
+        """
+        return HTMLResponse(content=html)
+    except Exception as e:
+        return HTMLResponse(content=f"<option disabled>Error loading types: {e}</option>")
+    finally:
+        await jira_client.close()
+
+
+@router.get("/rules/schema/fields", response_class=HTMLResponse)
+async def get_schema_fields(request: Request, target_jira_project: str, reference_issuetype: str) -> HTMLResponse:
+    jira_client = JiraClient()
+    redis_pool = request.app.state.arq_pool
+    resolver = FieldDataResolver(jira_client, redis_pool)
+
+    try:
+        schema = await resolver._get_createmeta(target_jira_project, reference_issuetype)
+        required_fields, optional_fields = _parse_jira_schema_fields(schema)
+
+        return templates.TemplateResponse(
+            "partials/_schema_fields.html",
+            {"request": request, "required_fields": required_fields, "optional_fields": optional_fields},
+        )
+    except Exception as e:
+        return HTMLResponse(content=f'<div class="notification is-danger">Failed to load schema: {e}</div>')
+    finally:
+        await jira_client.close()
+
+
+@router.get("/rules/routing/new", response_class=HTMLResponse)
+async def new_routing_rule_modal(
+    request: Request,
+    user: dict[str, Any] = Depends(get_current_admin_user),  # Adjust dependency if using require_pf_jira_admin
+) -> HTMLResponse:
+    """Provides an unhydrated modal for creating a new Routing Rule."""
+    jira_client = JiraClient()
+    try:
+        jira_projects = await jira_client.get_all_projects()
+    except Exception as e:
+        logger.error(f"Failed to fetch Jira projects for new rule modal: {e}")
+        jira_projects = []
+    finally:
+        await jira_client.close()
+
+    return templates.TemplateResponse(
+        "partials/_rule_form_modal.html",
+        {
+            "request": request,
+            "rule": None,
+            "jira_projects": jira_projects,
+            "current_issuetype": None,
+            "existing_mappings": {},
+            "required_fields": [],
+            "optional_fields": [],
         },
     )

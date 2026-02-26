@@ -7,7 +7,7 @@ from arq.worker import Retry
 from sqlalchemy.exc import OperationalError
 from sqlmodel import select
 
-from src.domain.pf_jira.models import SyncAuditLog, SyncOperation, SyncState
+from src.domain.pf_jira.models import RoutingAction, SyncAuditLog, SyncOperation, SyncState
 from src.domain.pf_jira.tasks import _compute_hash, sync_jira_to_pf_task, sync_pf_to_jira_task, zombie_recovery_task
 from tests.base import BaseTest
 
@@ -23,10 +23,13 @@ class TestPfJiraTasks(BaseTest):
         self.assertEqual(_compute_hash(dict_a), _compute_hash(dict_b))
         self.assertNotEqual(_compute_hash(dict_a), _compute_hash({"id": 1}))
 
+    @patch("src.domain.pf_jira.tasks.evaluate_routing_rules")
     @patch("src.domain.pf_jira.tasks.JiraClient", autospec=True)
     @patch("src.domain.pf_jira.tasks.PeopleForceClient", autospec=True)
-    async def test_sync_pf_to_jira_task_lifecycle(self, mock_pf_class, mock_jira_class) -> None:
+    async def test_sync_pf_to_jira_task_lifecycle(self, mock_pf_class, mock_jira_class, mock_evaluate) -> None:
         """Validates the create, update, and skip branches of the reconciliation engine."""
+        # Mock the routing engine to always return SYNC and a dummy payload
+        mock_evaluate.return_value = (SyncOperation.CREATE, {"fields": {"project": {"key": "IT"}}})
         task_1 = {
             "id": 100,
             "title": "Onboarding",
@@ -90,13 +93,28 @@ class TestPfJiraTasks(BaseTest):
         self.assertEqual(stats_3["skipped"], 1)
         mock_jira_instance.update_issue.assert_awaited_once()
 
-    @patch("src.domain.pf_jira.tasks.JiraClient", autospec=True)
+    @patch("src.domain.pf_jira.tasks.evaluate_routing_rules")
+    @patch("src.domain.pf_jira.tasks.JiraClient")
     @patch("src.domain.pf_jira.tasks.PeopleForceClient", autospec=True)
-    async def test_sync_pf_to_jira_task_404_recovery(self, mock_pf_class, mock_jira_class) -> None:
+    async def test_sync_pf_to_jira_task_404_recovery(self, mock_pf_class, mock_jira_class, mock_evaluate) -> None:
         """Validates that a 404 from Jira triggers local state purging (Ghost Record)."""
+
+        # Create a fake 404 HTTPStatusError to trigger the Ghost Record recovery
+        def fake_put(*args, **kwargs):
+            mock_resp = MagicMock()
+            mock_resp.status_code = 404
+            raise httpx.HTTPStatusError("404 Not Found", request=MagicMock(), response=mock_resp)
+
+        mock_jira_instance = mock_jira_class.return_value
+        # Apply the mock to the raw HTTPX client's PUT method instead of 'update_issue'
+        mock_jira_instance.client.put.side_effect = fake_put
+
         task_id = "404"
         issue_key = "HR-404"
         task_dict = {"id": int(task_id), "title": "Ghost Task", "completed": False}
+
+        # Mock the routing engine to always return SYNC and a dummy payload
+        mock_evaluate.return_value = (RoutingAction.SYNC, {"fields": {"project": {"key": "HR"}}})
 
         async def fake_get_tasks(*args, **kwargs):
             return [task_dict]
@@ -148,6 +166,51 @@ class TestPfJiraTasks(BaseTest):
             ).first()
             self.assertIsNotNone(audit_log)
             self.assertIn("Jira 404 Not Found", audit_log.details)
+
+    @patch("src.domain.pf_jira.tasks.evaluate_routing_rules")
+    @patch("src.domain.pf_jira.tasks.JiraClient", autospec=True)
+    @patch("src.domain.pf_jira.tasks.PeopleForceClient", autospec=True)
+    async def test_cache_invalidation_on_jira_400(self, mock_pf_class, mock_jira_class, mock_evaluate) -> None:
+        """Verifies HTTP 400 Bad Request triggers targeted Redis schema cache purge.
+
+        Simulates a schema drift scenario where the local cache is stale and Jira
+        rejects the payload. The engine must trap the 400, purge the exact project/issuetype
+        createmeta cache key, and raise a Retry to force a fresh pre-flight check.
+        """
+        # 1. Setup payload with explicit project and issuetype vectors
+        payload = {"fields": {"project": {"key": "IT"}, "issuetype": {"id": "10010"}, "summary": "Stale Schema Test"}}
+        mock_evaluate.return_value = (RoutingAction.SYNC, payload)
+
+        # 2. Fake the HTTP 400 Bad Request from Atlassian during issue creation
+        def fake_create_issue(*args, **kwargs):
+            mock_resp = MagicMock()
+            mock_resp.status_code = 400
+            raise httpx.HTTPStatusError("400 Bad Request", request=MagicMock(), response=mock_resp)
+
+        mock_jira_instance = mock_jira_class.return_value
+        mock_jira_instance.create_issue.side_effect = fake_create_issue
+        mock_jira_instance.get_account_id_by_email = AsyncMock(return_value="acc_123")
+        mock_jira_instance.close = AsyncMock()
+
+        # 3. Supply a dummy task to trigger the loop
+        task_dict = {"id": 999, "title": "Trigger Task", "completed": False}
+
+        async def fake_get_tasks(*args, **kwargs):
+            return [task_dict]
+
+        mock_pf_instance = mock_pf_class.return_value
+        mock_pf_instance.get_tasks.side_effect = fake_get_tasks
+        mock_pf_instance.close = AsyncMock()
+
+        # 4. Execute the worker and trap the expected ARQ Retry
+        with self.assertRaises(Retry) as context:
+            await sync_pf_to_jira_task(self.ctx)
+
+        # Assert a 5-second backoff was applied to allow cache invalidation
+        self.assertIn("5", str(context.exception))
+
+        # 5. Assert targeted cache invalidation occurred mapped exactly to resolver.py format
+        self.mock_redis.delete.assert_awaited_once_with("jira:createmeta:IT:10010")
 
     @patch("src.domain.pf_jira.tasks.PeopleForceClient", autospec=True)
     async def test_sync_jira_to_pf_task_success(self, mock_pf_class) -> None:

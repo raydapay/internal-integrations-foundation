@@ -1,7 +1,27 @@
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import ClassVar
 
-from sqlmodel import Field, Index, SQLModel, UniqueConstraint
+from sqlmodel import Field, Index, Relationship, SQLModel, UniqueConstraint
+
+
+class MappingSourceType(StrEnum):
+    """Defines the origin of the data injected into the Jira field."""
+
+    STATIC = "static"
+    PF_PAYLOAD = "pf_payload"  # Indicates source_value is a JSONPath (e.g., '$.assigned_to.email')
+
+
+class RuleFieldMapping(SQLModel, table=True):
+    """Normalized key-value mapping for dynamic Jira field injection."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    rule_id: int = Field(foreign_key="routingrule.id", index=True, ondelete="CASCADE")
+
+    jira_field_id: str = Field(index=True, description="The internal Jira ID, e.g., 'issuetype', 'customfield_10048'")
+    source_type: MappingSourceType = Field(default=MappingSourceType.STATIC)
+    source_value: str = Field(description="The hardcoded string, or the PF payload JSONPath.")
+    rule: "RoutingRule" = Relationship(back_populates="field_mappings")
 
 
 class SyncState(SQLModel, table=True):
@@ -45,22 +65,18 @@ class RoutingRule(SQLModel, table=True):
     priority: int = Field(default=100, index=True, description="Lower number evaluates first")
 
     # --- Conditions (Implicit AND) ---
-    condition_assignee_pattern: str | None = Field(
-        default=None, description="Exact email or domain like '@it.todapay.com'"
-    )
-    condition_title_keyword: str | None = Field(default=None, description="Lowercase keyword, e.g., 'уведомление'")
+    condition_assignee_pattern: str | None = Field(default=None)
+    condition_title_keyword: str | None = Field(default=None)
 
-    # --- Mutations (Applied if rule matches) ---
-    action: RoutingAction = Field(default=RoutingAction.SYNC, description="Whether to SYNC or DROP the matched task")
+    # --- Base Target ---
+    action: RoutingAction = Field(default=RoutingAction.SYNC)
     target_jira_project: str | None = Field(default=None, description="Jira Project Key, e.g., 'IT', 'HR'")
-    target_jira_task_type: str | None = Field(
-        default=None, description="Exact Jira dropdown value, e.g., 'Организационная'"
-    )
-    target_jira_labels: str | None = Field(default=None, description="Comma-separated labels to inject")
-    target_assignee_email: str | None = Field(default=None, description="Overrides the default PeopleForce assignee")
-    target_reporter_email: str | None = Field(default=None, description="Overrides the default PeopleForce reporter")
-
     is_active: bool = Field(default=True)
+
+    # --- Dynamic Field Mutations ---
+    field_mappings: list[RuleFieldMapping] = Relationship(
+        back_populates="rule", sa_relationship_kwargs={"cascade": "all, delete-orphan"}
+    )
 
 
 class SyncOperation(StrEnum):
@@ -75,11 +91,11 @@ class SyncOperation(StrEnum):
 class SyncAuditLog(SQLModel, table=True):
     """Immutable append-only ledger for human-readable integration telemetry."""
 
-    __table_args__ = {"extend_existing": True}
+    __table_args__: ClassVar[dict[str, bool]] = {"extend_existing": True}
 
     id: int | None = Field(default=None, primary_key=True)
     timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
-    direction: str = Field(default="PF ➡️Jira", description="Data flow vector")
+    direction: str = Field(default="PF ➡️ Jira", description="Data flow vector")
 
     pf_task_id: str | None = Field(default=None, index=True)
     jira_issue_key: str | None = Field(default=None, index=True)

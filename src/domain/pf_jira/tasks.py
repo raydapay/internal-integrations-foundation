@@ -7,13 +7,13 @@ from typing import Any, ClassVar
 import httpx
 import psutil
 import redis.asyncio as redis
-from arq import cron
+from arq import Retry, cron
 from arq.connections import RedisSettings
-from arq.worker import Retry
 from fastapi import status
 from loguru import logger
 from redis.exceptions import LockError
 from sqlalchemy import Integer, cast, func
+from sqlalchemy.orm import selectinload
 from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -27,7 +27,16 @@ from src.domain.pf_jira.mapping import (
     build_adf_description,
     evaluate_routing_rules,
 )
-from src.domain.pf_jira.models import DomainConfig, RoutingAction, RoutingRule, SyncAuditLog, SyncOperation, SyncState
+from src.domain.pf_jira.models import (
+    DomainConfig,
+    MappingSourceType,
+    RoutingAction,
+    RoutingRule,
+    SyncAuditLog,
+    SyncOperation,
+    SyncState,
+)
+from src.domain.pf_jira.resolver import FieldDataResolver, SchemaValidationError
 
 
 def _compute_hash(data: dict[str, Any]) -> str:
@@ -99,138 +108,6 @@ async def _calculate_sync_watermark(session: AsyncSession) -> int:
     return watermark_id or 0
 
 
-async def _resolve_identities_and_routing(
-    session: AsyncSession, jira_client: JiraClient, task: dict[str, Any]
-) -> dict[str, Any]:
-    """Evaluates routing rules and resolves Jira account identities via the Atlassian API.
-
-    Args:
-        session: The active asynchronous database session.
-        jira_client: The active Jira HTTP client.
-        task: The raw PeopleForce task payload.
-
-    Returns:
-        dict[str, Any]: Consolidated dictionary of routing targets, labels, and resolved Jira account IDs.
-    """
-    routing = await evaluate_routing_rules(session, task)
-
-    assignee_email = task.get("assigned_to", {}).get("email")
-
-    # Apply Firewall overrides or fallback to PF defaults
-    resolved_assignee_email = routing["assignee_email"] or assignee_email
-    resolved_reporter_email = routing["reporter_email"] or resolved_assignee_email
-
-    # Hit Atlassian API for exact account mappings
-    assignee_id = await jira_client.get_account_id_by_email(resolved_assignee_email)
-    reporter_id = await jira_client.get_account_id_by_email(resolved_reporter_email)
-
-    return {
-        "action": routing["action"],
-        "target_project": routing["project"],
-        "task_type": routing["task_type"],
-        "target_labels": ["PeopleForce"] + routing["labels"],
-        "assignee_id": assignee_id,
-        "reporter_id": reporter_id,
-        "resolved_assignee_email": resolved_assignee_email,
-        "resolved_reporter_email": resolved_reporter_email,
-    }
-
-
-def _build_jira_create_payload(
-    task: dict[str, Any], routing_data: dict[str, Any], config: DomainConfig, summary: str
-) -> dict[str, Any]:
-    """Constructs the Atlassian API JSON payload for creating a new Jira issue.
-
-    Args:
-        task: The raw PeopleForce task payload.
-        routing_data: The resolved firewall identities and target configurations.
-        config: The active domain configuration.
-        summary: The pre-computed Jira issue summary string.
-
-    Returns:
-        dict[str, Any]: The finalized JSON-serializable dictionary for issue creation.
-    """
-    task_id = str(task.get("id"))
-    starts_on = task.get("starts_on")
-    ends_on = task.get("ends_on")
-
-    payload = {
-        "fields": {
-            "project": {"key": routing_data["target_project"]},
-            "summary": summary,
-            "description": build_adf_description(task),
-            "issuetype": {"name": "Task"},
-            "labels": routing_data["target_labels"],
-        },
-        "properties": [{"key": "pf_sync_metadata", "value": {"pf_task_id": task_id}}],
-    }
-
-    if routing_data["assignee_id"]:
-        payload["fields"]["assignee"] = {"accountId": routing_data["assignee_id"]}
-    elif config.jira_fallback_account_id:
-        payload["fields"]["assignee"] = {"accountId": config.jira_fallback_account_id}
-
-    if routing_data["reporter_id"]:
-        payload["fields"]["reporter"] = {"accountId": routing_data["reporter_id"]}
-
-    if routing_data["task_type"] and config.jira_pf_task_id_custom_field:
-        payload["fields"][config.jira_pf_task_id_custom_field] = {"value": routing_data["task_type"]}
-
-    if ends_on:
-        payload["fields"]["duedate"] = ends_on
-    if starts_on:
-        payload["fields"][JIRA_CUSTOM_FIELD_START_DATE] = starts_on
-
-    return payload
-
-
-def _build_jira_update_payload(
-    task: dict[str, Any], routing_data: dict[str, Any], config: DomainConfig, summary: str
-) -> dict[str, Any]:
-    """Constructs the Atlassian API JSON payload for mutating an existing Jira issue.
-
-    Args:
-        task: The raw PeopleForce task payload.
-        routing_data: The resolved firewall identities and target configurations.
-        config: The active domain configuration.
-        summary: The pre-computed Jira issue summary string.
-
-    Returns:
-        dict[str, Any]: The finalized JSON-serializable dictionary for issue updating.
-    """
-    starts_on = task.get("starts_on")
-    ends_on = task.get("ends_on")
-
-    payload = {
-        "fields": {
-            "summary": summary,
-            "description": build_adf_description(task),
-            "labels": routing_data["target_labels"],
-        }
-    }
-
-    if routing_data["assignee_id"]:
-        payload["fields"]["assignee"] = {"accountId": routing_data["assignee_id"]}
-    else:
-        payload["fields"]["assignee"] = None  # Explicitly unassign if identity mapping fails on update
-
-    if routing_data["reporter_id"]:
-        payload["fields"]["reporter"] = {"accountId": routing_data["reporter_id"]}
-
-    if routing_data["task_type"] and config.jira_pf_task_id_custom_field:
-        payload["fields"][config.jira_pf_task_id_custom_field] = {"value": routing_data["task_type"]}
-
-    if not routing_data["assignee_id"] and config.jira_fallback_account_id:
-        payload["fields"]["assignee"] = {"accountId": config.jira_fallback_account_id}
-
-    if ends_on:
-        payload["fields"]["duedate"] = ends_on
-    if starts_on:
-        payload["fields"][JIRA_CUSTOM_FIELD_START_DATE] = starts_on
-
-    return payload
-
-
 async def _execute_safe_jira_update(
     session: AsyncSession,
     jira_client: JiraClient,
@@ -290,6 +167,7 @@ class SyncContext:
     stats: dict[str, int]
     cutoff_date: datetime | None
     job_id: str
+    resolver: FieldDataResolver
 
 
 @dataclass
@@ -328,17 +206,27 @@ def _is_task_historical(task: dict[str, Any], cutoff_date: datetime, task_id: st
         return False
 
 
-async def _handle_issue_creation(sync_ctx: SyncContext, task_ctx: TaskContext, routing_data: dict[str, Any]) -> None:
-    """Executes the complete lifecycle for generating a new Jira issue and recording state.
-
-    Args:
-        sync_ctx: Global synchronization dependencies and metrics.
-        task_ctx: Parsed context for the current PeopleForce task.
-        routing_data: Firewall and identity resolution outputs.
-    """
+async def _handle_issue_creation(sync_ctx: SyncContext, task_ctx: TaskContext, jira_payload: dict[str, Any]) -> None:
+    """Executes the complete lifecycle for generating a new Jira issue and recording state."""
     task_logger = logger.bind(pf_task_id=task_ctx.id, job_id=sync_ctx.job_id)
 
-    jira_payload = _build_jira_create_payload(task_ctx.raw, routing_data, sync_ctx.config, task_ctx.summary)
+    # 1. Inject code-computed fields (bypassing the UI mapper)
+    jira_payload["fields"]["summary"] = task_ctx.summary
+    jira_payload["fields"]["description"] = build_adf_description(task_ctx.raw)
+
+    # 2. Assignee Fallback Logic
+    if "assignee" not in jira_payload["fields"] and sync_ctx.config.jira_fallback_account_id:
+        jira_payload["fields"]["assignee"] = {"id": sync_ctx.config.jira_fallback_account_id}
+
+    # 3. Dynamic Dates
+    if task_ctx.raw.get("ends_on"):
+        jira_payload["fields"]["duedate"] = task_ctx.raw.get("ends_on")
+    if task_ctx.raw.get("starts_on"):
+        jira_payload["fields"][JIRA_CUSTOM_FIELD_START_DATE] = task_ctx.raw.get("starts_on")
+
+    # 4. Immutable Data Lineage
+    jira_payload["properties"] = [{"key": "pf_sync_metadata", "value": {"pf_task_id": task_ctx.id}}]
+
     task_logger.debug(f"Computed Jira Payload: {json.dumps(jira_payload)}")
 
     issue = await sync_ctx.jira_client.create_issue(jira_payload)
@@ -361,12 +249,9 @@ async def _handle_issue_creation(sync_ctx: SyncContext, task_ctx: TaskContext, r
             operation=SyncOperation.CREATE,
             details=json.dumps(
                 {
-                    "project": routing_data["target_project"],
-                    "assignee_email_resolved": routing_data["resolved_assignee_email"],
-                    "reporter_email_resolved": routing_data["resolved_reporter_email"],
-                    "task_type": routing_data["task_type"],
-                    "labels": routing_data["target_labels"],
+                    "project": jira_payload["fields"].get("project", {}).get("key"),
                     "summary_injected": task_ctx.summary,
+                    "dynamic_fields_mapped": list(jira_payload["fields"].keys()),
                 },
                 indent=2,
                 ensure_ascii=False,
@@ -387,20 +272,33 @@ async def _handle_issue_creation(sync_ctx: SyncContext, task_ctx: TaskContext, r
 
 
 async def _handle_issue_update(
-    sync_ctx: SyncContext, task_ctx: TaskContext, routing_data: dict[str, Any], state_record: SyncState
+    sync_ctx: SyncContext, task_ctx: TaskContext, jira_payload: dict[str, Any], state_record: SyncState
 ) -> None:
-    """Executes the mutation lifecycle for an existing Jira issue, handling state reconciliation.
-
-    Args:
-        sync_ctx: Global synchronization dependencies and metrics.
-        task_ctx: Parsed context for the current PeopleForce task.
-        routing_data: Firewall and identity resolution outputs.
-        state_record: The previously tracked local database state.
-    """
+    """Executes the mutation lifecycle for an existing Jira issue, handling state reconciliation."""
     task_logger = logger.bind(pf_task_id=task_ctx.id, job_id=sync_ctx.job_id)
     issue_key = state_record.jira_issue_key
 
-    update_payload = _build_jira_update_payload(task_ctx.raw, routing_data, sync_ctx.config, task_ctx.summary)
+    # CRITICAL: Jira's PUT endpoint rejects attempts to modify 'project' or 'issuetype'.
+    # We must strip them from the resolver's output before dispatching the update.
+    update_fields = dict(jira_payload["fields"])
+    update_fields.pop("project", None)
+    update_fields.pop("issuetype", None)
+
+    update_fields["summary"] = task_ctx.summary
+    update_fields["description"] = build_adf_description(task_ctx.raw)
+
+    if "assignee" not in update_fields:
+        if sync_ctx.config.jira_fallback_account_id:
+            update_fields["assignee"] = {"id": sync_ctx.config.jira_fallback_account_id}
+        else:
+            update_fields["assignee"] = None  # Explicitly unassign if mapping fails or is empty
+
+    if task_ctx.raw.get("ends_on"):
+        update_fields["duedate"] = task_ctx.raw.get("ends_on")
+    if task_ctx.raw.get("starts_on"):
+        update_fields[JIRA_CUSTOM_FIELD_START_DATE] = task_ctx.raw.get("starts_on")
+
+    update_payload = {"fields": update_fields}
     task_logger.debug(f"Computed Update Payload: {json.dumps(update_payload)}")
 
     update_success = await _execute_safe_jira_update(
@@ -425,10 +323,7 @@ async def _handle_issue_update(
             operation=SyncOperation.UPDATE,
             details=json.dumps(
                 {
-                    "assignee_email_resolved": routing_data["resolved_assignee_email"],
-                    "reporter_email_resolved": routing_data["resolved_reporter_email"],
-                    "task_type_resolved": routing_data["task_type"],
-                    "labels_resolved": routing_data["target_labels"],
+                    "dynamic_fields_updated": list(update_fields.keys()),
                     "completed_status_triggered": task_ctx.is_completed,
                 },
                 ensure_ascii=False,
@@ -442,9 +337,15 @@ async def _handle_issue_update(
 async def _process_single_task(task: dict[str, Any], ctx: SyncContext) -> None:
     """Evaluates and synchronizes a single PeopleForce task against the Jira state matrix.
 
+    Integrates the FieldDataResolver pipeline to validate target payloads against
+    dynamic Jira schemas, acting as a circuit breaker against upstream configuration drift.
+
     Args:
         task: The raw dictionary payload from the PeopleForce API.
         ctx: The global synchronization context object.
+
+    Raises:
+        LockError: If the Redis lock cannot be acquired (handled gracefully by the caller).
     """
     task_id = str(task.get("id"))
     task_logger = logger.bind(pf_task_id=task_id, job_id=ctx.job_id)
@@ -472,25 +373,56 @@ async def _process_single_task(task: dict[str, Any], ctx: SyncContext) -> None:
             statement = select(SyncState).where(SyncState.pf_entity_type == "task", SyncState.pf_entity_id == task_id)
             state_record = (await ctx.session.exec(statement)).first()
 
-            routing_data = await _resolve_identities_and_routing(ctx.session, ctx.jira_client, task)
-
-            if routing_data["action"] == RoutingAction.DROP:
-                task_logger.debug(f"Task {task_id} dropped by firewall routing rule.")
-                ctx.stats["skipped"] += 1
-                return
-
-            if not state_record:
-                await _handle_issue_creation(ctx, task_ctx, routing_data)
-            elif state_record.last_sync_hash != task_ctx.hash:
-                await _handle_issue_update(ctx, task_ctx, routing_data, state_record)
-            else:
+            # Optimization: Evaluate hash delta BEFORE triggering the resolver pipeline.
+            # Prevents unnecessary Jira createmeta API calls for unchanged tasks.
+            if state_record and state_record.last_sync_hash == task_ctx.hash:
                 ctx.stats["skipped"] += 1
                 task_logger.debug(
                     f"Skipped (No Delta): Payload hash {task_ctx.hash} exactly matches "
                     "the state stored in the database."
                 )
+                return
 
-            await ctx.session.commit()
+            try:
+                # Execute the unified Phase 2 routing and payload assembly pipeline
+                action, jira_payload = await evaluate_routing_rules(
+                    session=ctx.session, pf_payload=task, resolver=ctx.resolver
+                )
+
+                if action in [RoutingAction.DROP, getattr(RoutingAction, "IGNORE", None)]:
+                    task_logger.debug(f"Task {task_id} dropped by firewall routing rule.")
+                    ctx.stats["skipped"] += 1
+                    return
+
+                try:
+                    if not state_record:
+                        await _handle_issue_creation(ctx, task_ctx, jira_payload)
+                    else:
+                        await _handle_issue_update(ctx, task_ctx, jira_payload, state_record)
+
+                except httpx.HTTPStatusError as e:
+                    # Reactive Cache Invalidation (The 400 Trap)
+                    if e.response.status_code == status.HTTP_400_BAD_REQUEST:
+                        project = jira_payload["fields"]["project"]["key"]
+                        issuetype = jira_payload["fields"]["issuetype"]["id"]
+                        cache_key = f"jira:createmeta:{project}:{issuetype}"
+
+                        task_logger.warning(f"Jira HTTP 400. Suspected schema drift. Purging cache: {cache_key}")
+                        await ctx.redis_client.delete(cache_key)
+
+                        # Defers the task for 5 seconds. The retry will fetch the fresh schema,
+                        # fail Pass 3 validation, and cleanly trip the SchemaValidationError block.
+                        raise Retry(defer=5) from e
+                    raise
+
+                await ctx.session.commit()
+
+            except SchemaValidationError as e:
+                # Phase 2 Circuit Breaker: Intercepts schema drift to prevent Poison Pill loops
+                task_logger.error(f"Schema drift detected for task {task_id}: {e}")
+                await notify(f"⚠️ *Schema Drift Detected*\nJira metadata changed. Task `{task_id}` blocked:\n`{e}`")
+                # Yielding prevents the ARQ worker from raising an exception and retrying infinitely
+                ctx.stats["skipped"] += 1
 
     except LockError:
         task_logger.warning("Task locked by concurrent worker process. Yielding.")
@@ -515,6 +447,10 @@ async def sync_pf_to_jira_task(ctx: dict[Any, Any], payload: dict[str, Any] | No
     # --- Core Execution Begins ---
     pf_client = PeopleForceClient()
     jira_client = JiraClient()
+
+    # 2. Initialize the Transformation & Validation Pipeline
+    resolver = FieldDataResolver(jira_client=jira_client, redis=redis_client)
+
     stats = {"created": 0, "updated": 0, "skipped": 0, "status": "executed"}
 
     cutoff_date = settings.PF_SYNC_CREATED_AFTER
@@ -530,6 +466,7 @@ async def sync_pf_to_jira_task(ctx: dict[Any, Any], payload: dict[str, Any] | No
         stats=stats,
         cutoff_date=cutoff_date,
         job_id=job_id,
+        resolver=resolver,  # 3. Inject into the execution context
     )
 
     try:
@@ -732,88 +669,110 @@ async def zombie_recovery_task(ctx: dict[Any, Any]) -> dict[str, Any]:
 
 
 async def validate_routing_rules_task(ctx: dict[Any, Any]) -> dict[str, Any]:
-    """Validates configured Jira targets and identities against the live Atlassian API.
+    """Proactively validates active RoutingRules against live Jira schemas.
 
-    Writes the resulting validation matrix to a transient Redis key for
-    HTMX frontend polling.
+    Implements the Phase 2 Nightly Circuit Breaker pattern. Detects schema drift
+    (e.g., missing fields, newly required fields) and safely disables violating
+    rules before they poison the active worker queues.
     """
-    redis_client = ctx["redis"]
+    job_id = ctx.get("job_id", "unknown")
+    task_logger = logger.bind(job_id=job_id, operation="schema_validator")
+
     jira_client = JiraClient()
+    redis_client = ctx["redis"]
+    resolver = FieldDataResolver(jira_client=jira_client, redis=redis_client)
+
+    # CRITICAL FIX: Ensure status and details array exist for the UI payload
+    stats = {"validated": 0, "disabled": 0, "skipped": 0, "status": "completed", "details": []}
 
     try:
         async with async_session_maker() as session:
-            statement = select(RoutingRule).where(RoutingRule.is_active)
-            rules = (await session.exec(statement)).all()
+            # Eagerly load mappings to prevent DetachedInstanceError
+            stmt = (
+                select(RoutingRule)
+                .where(RoutingRule.is_active.is_(True))
+                .options(selectinload(RoutingRule.field_mappings))
+            )
+            rules = (await session.exec(stmt)).all()
 
-        results = []
+            for rule in rules:
+                # 1. Isolate the target Issue Type
+                issuetype_mapping = next((m for m in rule.field_mappings if m.jira_field_id == "issuetype"), None)
 
-        # 1. Project Validation
-        jira_projects = await jira_client.get_all_projects()
-        valid_project_keys = {p["key"] for p in jira_projects}
+                if not issuetype_mapping or issuetype_mapping.source_type != MappingSourceType.STATIC:
+                    task_logger.debug(f"Rule {rule.id} lacks a static issuetype. Skipping proactive validation.")
+                    stats["skipped"] += 1
+                    continue
 
-        configured_projects = {r.target_jira_project for r in rules if r.target_jira_project}
-        for proj in configured_projects:
-            if proj in valid_project_keys:
-                results.append({"project": f"Project: {proj}", "valid": True, "message": "OK"})
-            else:
-                results.append(
-                    {
-                        "project": f"Project: {proj}",
-                        "valid": False,
-                        "message": "Project Not Found or Missing Permissions",
-                    }
-                )
+                issue_type_id = issuetype_mapping.source_value
 
-        # 2. Identity Validation (Overrides)
-        # Extract unique emails across both assignee and reporter overrides
-        configured_emails = {
-            email for r in rules for email in (r.target_assignee_email, r.target_reporter_email) if email
-        }
+                try:
+                    # 2. Fetch live schema.
+                    schema = await resolver._get_createmeta(rule.target_jira_project, issue_type_id)
 
-        for email in configured_emails:
-            account_id = await jira_client.get_account_id_by_email(email)
-            if account_id:
-                results.append({"project": f"User: {email}", "valid": True, "message": "Account resolved"})
-            else:
-                results.append(
-                    {"project": f"User: {email}", "valid": False, "message": "Unmapped email (Not found in Jira)"}
-                )
+                    # 3. Dry-Run Structural Validation
+                    mapped_fields = {m.jira_field_id for m in rule.field_mappings if m.jira_field_id != "issuetype"}
 
-        # 3. Task Type Validation (Strict List)
-        # First, fetch the config to get the field ID
-        async with async_session_maker() as session:
-            stmt = select(DomainConfig).where(DomainConfig.domain_name == "pf_jira")
-            config = (await session.exec(stmt)).first()
+                    for field_id in mapped_fields:
+                        if field_id not in schema:
+                            raise SchemaValidationError(
+                                f"Mapped field '{field_id}' no longer exists on the Create Screen."
+                            )
 
-        # Pass the dynamic field ID to the client
-        jira_task_types = await jira_client.get_task_type_options(config.jira_pf_task_id_custom_field)
-        valid_task_types = set(jira_task_types)
+                    # Explicitly whitelist natively injected fields so they don't trigger validation failures
+                    for field_id, field_meta in schema.items():
+                        if (
+                            field_meta.get("required")
+                            and field_id not in mapped_fields
+                            and field_id
+                            not in ["project", "issuetype", "summary", "description", "duedate", "reporter"]
+                        ):
+                            raise SchemaValidationError(
+                                f"Jira requires field '{field_id}', but it is missing from the rule mappings."
+                            )
 
-        configured_task_types = {r.target_jira_task_type for r in rules if r.target_jira_task_type}
-        for tt in configured_task_types:
-            if tt in valid_task_types:
-                results.append({"project": f"Type: {tt}", "valid": True, "message": "OK"})
-            else:
-                results.append(
-                    {
-                        "project": f"Type: {tt}",
-                        "valid": False,
-                        "message": f"Invalid option. Allowed: {', '.join(valid_task_types) or 'None found'}",
-                    }
-                )
+                    stats["validated"] += 1
+                    stats["details"].append(
+                        {
+                            "project": rule.target_jira_project,
+                            "valid": True,
+                            "message": f"Rule {rule.id} mapping is valid.",
+                        }
+                    )
 
-        report = {"status": "completed", "details": results, "timestamp": datetime.utcnow().isoformat()}
+                except SchemaValidationError as e:
+                    # 4. Deterministic Schema Drift -> Trip the Circuit Breaker
+                    task_logger.error(f"Rule {rule.id} failed validation: {e}. Disabling rule.")
 
-        await redis_client.setex("pf_jira:validation_report", 300, json.dumps(report))
-        return report
+                    rule.is_active = False
+                    session.add(rule)
+                    await session.commit()
+                    await notify(
+                        f"🛑 *Circuit Breaker Tripped*\n"
+                        f"Routing Rule `{rule.id}` disabled due to schema drift.\n"
+                        f"*Project:* {rule.target_jira_project}\n*Reason:* {e}"
+                    )
+                    stats["disabled"] += 1
+                    stats["details"].append({"project": rule.target_jira_project, "valid": False, "message": str(e)})
 
-    except Exception as e:
-        logger.exception("Validation task failed.")
-        error_report = {"status": "failed", "error": str(e)}
+        # CRITICAL FIX: Write the final report to Redis so the UI can break out of the polling loop
+        await redis_client.setex("pf_jira:validation_report", 300, json.dumps(stats))
+
+    except (httpx.TimeoutException, httpx.HTTPStatusError) as net_err:
+        task_logger.warning(f"Network error during schema fetch: {net_err}. Executing geometric backoff.")
+        retry_count = ctx.get("job_try", 1)
+        raise Retry(defer=2**retry_count) from net_err
+
+    except Exception as err:
+        task_logger.exception("Catastrophic failure in proactive validation pipeline.")
+        error_report = {"status": "failed", "error": str(err)}
         await redis_client.setex("pf_jira:validation_report", 300, json.dumps(error_report))
         raise
+
     finally:
         await jira_client.close()
+
+    return stats
 
 
 def _evaluate_hardware_thresholds(config: DomainConfig) -> list[str]:

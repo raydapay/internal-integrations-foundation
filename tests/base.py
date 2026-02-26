@@ -65,10 +65,18 @@ class BaseTest(unittest.IsolatedAsyncioTestCase):
         self.mock_redis.get.return_value = None
         self.mock_redis.set.return_value = None
         self.ctx = {"redis": self.mock_redis, "job_id": "test_job_1"}
+        # Globally suppress all Slack/Telegram broadcasts during test execution
+        self.core_notify_patcher = patch("src.core.notifications.notify", new_callable=AsyncMock)
+        self.tasks_notify_patcher = patch("src.domain.pf_jira.tasks.notify", new_callable=AsyncMock)
+
+        self.mock_core_notify = self.core_notify_patcher.start()
+        self.mock_tasks_notify = self.tasks_notify_patcher.start()
 
     async def asyncTearDown(self) -> None:
         """Destroys the in-memory database and restores the original engine."""
         self.session_patcher.stop()
+        self.core_notify_patcher.stop()
+        self.tasks_notify_patcher.stop()
 
         async with self.test_engine.begin() as conn:
             await conn.run_sync(SQLModel.metadata.drop_all)
