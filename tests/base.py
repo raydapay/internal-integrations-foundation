@@ -51,7 +51,6 @@ class BaseTest(unittest.IsolatedAsyncioTestCase):
                 is_active=True,
                 polling_interval_seconds=300,
                 default_jira_project="HR",
-                jira_pf_task_id_custom_field="customfield_10048",
             )
             session.add(config)
             await session.commit()

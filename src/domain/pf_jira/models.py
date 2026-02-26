@@ -10,6 +10,7 @@ class MappingSourceType(StrEnum):
 
     STATIC = "static"
     PF_PAYLOAD = "pf_payload"  # Indicates source_value is a JSONPath (e.g., '$.assigned_to.email')
+    TEMPLATE = "template"  # Indicates source_value contains interpolation tags (e.g., 'Task: {{ title }}')
 
 
 class RuleFieldMapping(SQLModel, table=True):
@@ -119,7 +120,8 @@ class DomainConfig(SQLModel, table=True):
     alert_disk_threshold_pct: float = Field(default=90.0)
     alert_queue_depth_threshold: int = Field(default=500)
     # Jira Integration Constants
-    jira_pf_task_id_custom_field: str = Field(default="customfield_10048")
     jira_fallback_account_id: str | None = Field(default=None)
+    jira_tracking_label: str = Field(default="PeopleForce")
+    jira_entity_property_key: str = Field(default="pf_sync_metadata")
 
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

@@ -26,9 +26,9 @@
                             name="mapping_{{ field_id }}"
                             value="{{ existing_mappings.get(field_id, '') if existing_mappings else '' }}"
                             {% if meta.schema.type == 'array' %}
-                            placeholder="val1, val2 or $.path"
+                            placeholder="val1, val2 or $.path or {{ template }}"
                             {% else %}
-                            placeholder="Static value or $.path"
+                            placeholder="Static, $.path, or {{ template }}"
                             {% endif %}
                             {% if meta.required %}required{% endif %}>
                     {% endif %}

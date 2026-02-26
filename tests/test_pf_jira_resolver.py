@@ -113,3 +113,28 @@ async def test_allowed_values_mismatch(self) -> None:
     self.assertIn("customfield_10045", error_msg)
     self.assertIn("Marketing", error_msg)
     self.assertIn("Engineering, Human Resources", error_msg)
+
+
+async def test_resolve_template_interpolation(self) -> None:
+    """Verifies regex interpolation handles mixed types, nulls, and nested JSONPaths."""
+    pf_payload = {
+        "title": "Onboarding Verification",
+        "metadata": {"priority_id": 1, "notes": None},
+        "assignee": {"email": "test@example.com"},
+    }
+
+    # Case 1: Standard interpolation
+    res_1 = self.resolver._resolve_template("Task: {{ title }} - Assigned: {{ assignee.email }}", pf_payload)
+    self.assertEqual(res_1, "Task: Onboarding Verification - Assigned: test@example.com")
+
+    # Case 2: Integer casting
+    res_2 = self.resolver._resolve_template("Priority ID: {{ metadata.priority_id }}", pf_payload)
+    self.assertEqual(res_2, "Priority ID: 1")
+
+    # Case 3: Missing paths and explicit None values evaluate to empty strings
+    res_3 = self.resolver._resolve_template("Notes: {{ metadata.notes }} | Missing: {{ does.not.exist }}", pf_payload)
+    self.assertEqual(res_3, "Notes:  | Missing: ")
+
+    # Case 4: No interpolation tags (Acts as static string)
+    res_4 = self.resolver._resolve_template("Static Override", pf_payload)
+    self.assertEqual(res_4, "Static Override")

@@ -225,7 +225,15 @@ async def _handle_issue_creation(sync_ctx: SyncContext, task_ctx: TaskContext, j
         jira_payload["fields"][JIRA_CUSTOM_FIELD_START_DATE] = task_ctx.raw.get("starts_on")
 
     # 4. Immutable Data Lineage
-    jira_payload["properties"] = [{"key": "pf_sync_metadata", "value": {"pf_task_id": task_ctx.id}}]
+    jira_payload["properties"] = [
+        {"key": sync_ctx.config.jira_entity_property_key, "value": {"pf_task_id": task_ctx.id}}
+    ]
+
+    if "labels" not in jira_payload["fields"]:
+        jira_payload["fields"]["labels"] = []
+
+    if sync_ctx.config.jira_tracking_label not in jira_payload["fields"]["labels"]:
+        jira_payload["fields"]["labels"].append(sync_ctx.config.jira_tracking_label)
 
     task_logger.debug(f"Computed Jira Payload: {json.dumps(jira_payload)}")
 
@@ -629,8 +637,14 @@ async def zombie_recovery_task(ctx: dict[Any, Any]) -> dict[str, Any]:
     stats = {"found": 0, "recovered": 0, "errors": 0}
 
     try:
+        # Resolve tracking label dynamically for the sweep
+        async with async_session_maker() as session:
+            stmt = select(DomainConfig).where(DomainConfig.domain_name == "pf_jira")
+            config = (await session.exec(stmt)).first()
+            tracking_label = config.jira_tracking_label if config else "PeopleForce"
+
         # Target issues completed in the last 24 hours with the integration label
-        jql = "labels = PeopleForce AND statusCategory = Done AND updated >= -24h"
+        jql = f"labels = {tracking_label} AND statusCategory = Done AND updated >= -24h"
         issues = await jira_client.search_issues(jql, fields=["status"])
         stats["found"] = len(issues)
 

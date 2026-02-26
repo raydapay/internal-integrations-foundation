@@ -43,27 +43,30 @@
     </td>
 
     <td class="is-vcentered">
-    <div class="tags are-small mb-0">
-        {% for mapping in rule.field_mappings %}
-            {% if mapping.jira_field_id == 'issuetype' %}
-
-                <span class="tag is-info is-themed" title="Issue Type">
-                    {{ issuetype_map.get(mapping.source_value, mapping.source_value) if issuetype_map else mapping.source_value }}
-                </span>
-            {% elif mapping.source_type.value | string | upper == 'PF_PAYLOAD' or mapping.source_type | string | upper == 'PF_PAYLOAD' %}
-                <span class="tag is-warning" title="Dynamic Extraction">
-                    {{ mapping.jira_field_id }}: {{ mapping.source_value }}
-                </span>
+        <div class="tags are-small mb-0">
+            {% for mapping in rule.field_mappings %}
+                {% if mapping.jira_field_id == 'issuetype' %}
+                    <span class="tag is-info is-themed" title="Issue Type">
+                        {{ issuetype_map.get(mapping.source_value, mapping.source_value) if issuetype_map else mapping.source_value }}
+                    </span>
+                {% elif mapping.source_type.value | string | upper == 'PF_PAYLOAD' or mapping.source_type | string | upper == 'PF_PAYLOAD' %}
+                    <span class="tag is-warning" title="Dynamic Extraction">
+                        {{ mapping.jira_field_id }}: {{ mapping.source_value }}
+                    </span>
+                {% elif mapping.source_type.value | string | upper == 'TEMPLATE' or mapping.source_type | string | upper == 'TEMPLATE' %}
+                    <span class="tag is-primary is-light" title="String Template">
+                        {{ mapping.jira_field_id }}: {{ mapping.source_value }}
+                    </span>
+                {% else %}
+                    <span class="tag" title="Static Override">
+                        {{ mapping.jira_field_id }}: {{ mapping.source_value }}
+                    </span>
+                {% endif %}
             {% else %}
-                <span class="tag" title="Static Override">
-                    {{ mapping.jira_field_id }}: {{ mapping.source_value }}
-                </span>
-            {% endif %}
-        {% else %}
-            <span class="has-text-grey is-italic is-size-7">No mappings configured</span>
-        {% endfor %}
-    </div>
-</td>
+                <span class="has-text-grey is-italic is-size-7">No mappings configured</span>
+            {% endfor %}
+        </div>
+    </td>
 
     <td class="is-vcentered has-text-right">
         <div class="buttons is-right">

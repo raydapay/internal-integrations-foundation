@@ -4,6 +4,7 @@ Jira Payload Resolution and Schema Validation Pipeline.
 
 import json
 import logging
+import re
 from typing import Any
 
 from redis.asyncio import Redis
@@ -124,7 +125,29 @@ class FieldDataResolver:
         if mapping.source_type == MappingSourceType.PF_PAYLOAD:
             return self._resolve_dot_notation(mapping.source_value, pf_payload)
 
+        if mapping.source_type == MappingSourceType.TEMPLATE:
+            return self._resolve_template(mapping.source_value, pf_payload)
+
         return None
+
+    def _resolve_template(self, template: str, payload: dict[str, Any]) -> str:
+        """Interpolates JSONPath variables within a string template.
+
+        Args:
+            template: The string containing {{ path.to.var }} placeholders.
+            payload: The source dictionary.
+
+        Returns:
+            str: The interpolated string. Unresolved paths evaluate to an empty string.
+        """
+        pattern = re.compile(r"\{\{\s*([\w\.]+)\s*\}\}")
+
+        def replacer(match: re.Match) -> str:
+            path = match.group(1)
+            val = self._resolve_dot_notation(path, payload)
+            return str(val) if val is not None else ""
+
+        return pattern.sub(replacer, template)
 
     def _resolve_dot_notation(self, path: str, payload: dict[str, Any]) -> Any:
         """Traverses a nested dictionary using dot notation (e.g., 'assignee.email').

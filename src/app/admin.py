@@ -241,11 +241,13 @@ async def update_settings(
             "partials/_toast.html",
             {"request": request, "level": "danger", "message": "System error: DomainConfig not found."},
         )
-    # Extract Jira configuration constants
-    config.jira_pf_task_id_custom_field = form_data.get("jira_pf_task_id_custom_field", "customfield_10048").strip()
 
     fallback_acc = form_data.get("jira_fallback_account_id")
     config.jira_fallback_account_id = fallback_acc.strip() if fallback_acc else None
+
+    # Inject Lineage Tracking constants
+    config.jira_tracking_label = form_data.get("jira_tracking_label", "PeopleForce").strip()
+    config.jira_entity_property_key = form_data.get("jira_entity_property_key", "pf_sync_metadata").strip()
 
     config.is_active = is_active
     config.polling_interval_seconds = polling_interval_seconds
@@ -344,15 +346,13 @@ async def rules_dashboard(
     jira_client = JiraClient()
     # 1. Ensure you have the DomainConfig fetched
     config_stmt = select(DomainConfig).where(DomainConfig.domain_name == "pf_jira")
-    config = (await session.exec(config_stmt)).first()
 
-    # 2. Extract the field_id from config or use the migration default
-    field_id = config.jira_pf_task_id_custom_field if config else "customfield_10048"
+    # config = (await session.exec(config_stmt)).first()
+    _ = (await session.exec(config_stmt)).first()
 
     # 3. Pass the argument to the client
     try:
         jira_projects = await jira_client.get_all_projects()
-        jira_task_types = await jira_client.get_task_type_options(field_id)
         issuetype_map = await jira_client.get_issue_type_map()
     finally:
         await jira_client.close()
@@ -364,7 +364,6 @@ async def rules_dashboard(
             "user": user,
             "routing_rules": rules,
             "jira_projects": jira_projects,
-            "jira_task_types": jira_task_types,
             "issuetype_map": issuetype_map,
         },
     )
@@ -406,7 +405,13 @@ async def add_routing_rule(
             if not val_str:
                 continue
 
-            source_type = MappingSourceType.PF_PAYLOAD if val_str.startswith("$.") else MappingSourceType.STATIC
+            # Route to the appropriate AST parser based on string heuristics
+            if val_str.startswith("$."):
+                source_type = MappingSourceType.PF_PAYLOAD
+            elif "{{" in val_str and "}}" in val_str:
+                source_type = MappingSourceType.TEMPLATE
+            else:
+                source_type = MappingSourceType.STATIC
 
             new_rule.field_mappings.append(
                 RuleFieldMapping(jira_field_id=jira_field_id, source_type=source_type, source_value=val_str)
@@ -560,7 +565,13 @@ async def update_routing_rule(
             if not val_str:
                 continue
 
-            source_type = MappingSourceType.PF_PAYLOAD if val_str.startswith("$.") else MappingSourceType.STATIC
+            # Route to the appropriate AST parser based on string heuristics
+            if val_str.startswith("$."):
+                source_type = MappingSourceType.PF_PAYLOAD
+            elif "{{" in val_str and "}}" in val_str:
+                source_type = MappingSourceType.TEMPLATE
+            else:
+                source_type = MappingSourceType.STATIC
 
             rule.field_mappings.append(
                 RuleFieldMapping(jira_field_id=jira_field_id, source_type=source_type, source_value=val_str)

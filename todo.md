@@ -20,6 +20,7 @@
 - [ ] **Decoupling:** Refactor `src/domain/` to support a dynamic plugin loader. Extract `pf_jira` into an isolated module that registers its own routers, workers, and menu items at startup.
 - [ ] **Stubs:** Outline and scaffold the file structures for future integrations: `plugins/telegram`, `plugins/slack`, `plugins/pipedrive`.
 - [x] **Alerting Service:** Implement a unified internal service to push critical fault notifications (e.g., worker death, network timeouts) to a dedicated Slack/Telegram webhook.
+- [ ] **Buetify Logs:** Get rid of all ugly log records like `<built-in method rollback of sqlite3.Connection object at 0x000001CC9D4924D0>` - async / await noice, turn them to beatiful meaningfull strings
 
 ## 3. Testing & CI/CD
 - [x] **Firewall Matrix Testing:** Write unittests for the new `evaluate_routing_rules` linear evaluation logic to guarantee priority sorting and default fallbacks.

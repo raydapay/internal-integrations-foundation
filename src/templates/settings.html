@@ -53,26 +53,38 @@
             <h3 class="title is-5">Jira Integration Constants</h3>
 
             <div class="columns is-multiline">
-                <div class="column is-6">
-                    <div class="field">
-                        <label class="label">PeopleForce Task ID Field</label>
-                        <div class="control">
-                            <input class="input" type="text" name="jira_pf_task_id_custom_field" value="{{ config.jira_pf_task_id_custom_field if config else 'customfield_10048' }}" required>
-                        </div>
-                        <p class="help text-muted">The internal Jira Custom Field ID used to track the PF Task ID.</p>
-                    </div>
-                </div>
 
                 <div class="column is-6">
                     <div class="field">
                         <label class="label">Fallback Account ID</label>
-                        <div class="control">
+                        <div class="control">get_task_type_options
                             <input class="input" type="text" name="jira_fallback_account_id" value="{{ config.jira_fallback_account_id if config else '' }}">
                         </div>
                         <p class="help text-muted">The Jira Account ID to assign tasks to if identity mapping fails.</p>
                     </div>
                 </div>
+
+                <div class="column is-6">
+                    <div class="field">
+                        <label class="label">Jira Tracking Label</label>
+                        <div class="control">
+                            <input class="input" type="text" name="jira_tracking_label" value="{{ config.jira_tracking_label if config else 'PeopleForce' }}" required>
+                        </div>
+                        <p class="help text-muted">The label appended to all synced issues for JQL tracking and Return Vector sweeping.</p>
+                    </div>
+                </div>
+
+                <div class="column is-6">
+                    <div class="field">
+                        <label class="label">Entity Property Key</label>
+                        <div class="control">
+                            <input class="input" type="text" name="jira_entity_property_key" value="{{ config.jira_entity_property_key if config else 'pf_sync_metadata' }}" required>
+                        </div>
+                        <p class="help text-muted">The invisible entity property key storing immutable state metadata.</p>
+                    </div>
+                </div>
             </div>
+            <hr class="my-5">
             <hr class="my-5">
             <h3 class="title is-5">Health & Alerting Thresholds</h3>
             <p class="subtitle is-6 text-muted mb-4">Set to 0 to disable a specific check.</p>

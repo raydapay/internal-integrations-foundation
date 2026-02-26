@@ -186,34 +186,6 @@ class JiraClient(BaseClient):
         super().__init__(settings.JIRA_BASE_URL, headers=headers, auth=auth_tuple)
         self._transition_cache: dict[str, str] = {}
 
-    async def get_task_type_options(self, field_id) -> list[str]:
-        """Dynamically fetches the allowed values for the Task Type custom field."""
-        if not field_id:
-            logger.warning("No Task Type Custom Field ID provided to JiraClient.")
-            return []
-        try:
-            # 1. Fetch contexts associated with the custom field
-            contexts_url = f"/rest/api/3/field/{field_id}/context"
-            response = await self.client.get(contexts_url)
-            response.raise_for_status()
-            contexts = response.json().get("values", [])
-
-            options = []
-            # 2. Fetch the allowed options for each context
-            for ctx in contexts:
-                context_id = ctx["id"]
-                options_url = f"/rest/api/3/field/{field_id}/context/{context_id}/option"
-                opt_response = await self.client.get(options_url)
-                opt_response.raise_for_status()
-                for opt in opt_response.json().get("values", []):
-                    options.append(opt["value"])
-
-            # Return unique sorted options
-            return sorted(list(set(options)))
-        except httpx.HTTPStatusError as e:
-            logger.error(f"Failed to fetch Task Type options from Jira API: {e}")
-            return []
-
     async def get_account_id_by_email(self, email: str) -> str | None:
         """Resolves a Jira accountId from an email address.
 
