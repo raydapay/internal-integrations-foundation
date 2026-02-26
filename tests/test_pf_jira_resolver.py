@@ -217,6 +217,20 @@ class TestFieldDataResolver(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(SchemaValidationError):
             self.resolver._validate_allowed_values("Marketing", schema, "customfield_1")
 
+    def test_format_doc_bold_support(self) -> None:
+        """Verifies that lines wrapped in asterisks are converted to bold ADF marks."""
+        res = self.resolver._format_doc("*Bold Header*\nRegular line")
+
+        # Check Bold Node
+        bold_node = res["content"][0]["content"][0]
+        self.assertEqual(bold_node["text"], "Bold Header")
+        self.assertEqual(bold_node["marks"][0]["type"], "bold")
+
+        # Check Regular Node
+        reg_node = res["content"][1]["content"][0]
+        self.assertEqual(reg_node["text"], "Regular line")
+        self.assertNotIn("marks", reg_node)
+
 
 if __name__ == "__main__":
     unittest.main()

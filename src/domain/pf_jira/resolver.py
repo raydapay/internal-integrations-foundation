@@ -238,14 +238,30 @@ class FieldDataResolver:
             )
 
     def _format_doc(self, value: Any) -> dict[str, Any]:
-        """Formats text into an Atlassian Document Format (ADF) object."""
+        """Formats text into an Atlassian Document Format (ADF) object with basic bold support."""
+        MIN_BOLD_MARKER_LEN = 2
         safe_text = str(value) if value is not None else ""
         paragraphs = []
+
         for line in safe_text.split("\n"):
             clean_line = line.strip()
-            paragraphs.append(
-                {"type": "paragraph", "content": [{"text": clean_line, "type": "text"}] if clean_line else []}
-            )
+            content = []
+
+            if clean_line:
+                # Basic Bold Detection: checks if line starts and ends with *
+                is_bold = (
+                    clean_line.startswith("*") and clean_line.endswith("*") and len(clean_line) > MIN_BOLD_MARKER_LEN
+                )
+
+                text_node = {"type": "text", "text": clean_line.strip("*") if is_bold else clean_line}
+
+                if is_bold:
+                    text_node["marks"] = [{"type": "bold"}]
+
+                content.append(text_node)
+
+            paragraphs.append({"type": "paragraph", "content": content})
+
         return {"version": 1, "type": "doc", "content": paragraphs}
 
     def _format_date(self, value: Any) -> str | None:
