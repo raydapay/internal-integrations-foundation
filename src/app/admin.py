@@ -22,7 +22,7 @@ from src.config.settings import settings
 from src.core.broadcaster import log_broadcaster
 from src.core.clients import JiraClient, NotificationClient, PeopleForceClient
 from src.core.database import get_session
-from src.core.utils import generate_highlighted_json
+from src.core.utils import CacheManager, generate_highlighted_json
 from src.domain.pf_jira.models import (
     DomainConfig,
     MappingSourceType,
@@ -208,10 +208,16 @@ async def settings_dashboard(
     config = (await session.exec(select(DomainConfig).where(DomainConfig.domain_name == "pf_jira"))).first()
 
     jira_client = JiraClient()
+    redis_client = redis.from_url(settings.REDIS_URL)
+    cache = CacheManager(redis_client)
     try:
-        jira_projects = await jira_client.get_all_projects()
+        jira_projects = await cache.get_swr("jira:projects", jira_client.get_all_projects)
+    except Exception as e:
+        logger.error(f"Failed to fetch Jira metadata: {e}")
+        jira_projects = []
     finally:
         await jira_client.close()
+        await redis_client.aclose()
 
     return templates.TemplateResponse(
         "settings.html", {"request": request, "user": user, "config": config, "jira_projects": jira_projects}
@@ -340,9 +346,11 @@ async def rules_dashboard(
     Returns:
         HTMLResponse: The complete rendered dashboard.
     """
-    # CRITICAL FIX: Eager load the field_mappings relationship to prevent async DetachedInstanceError
     stmt = select(RoutingRule).options(selectinload(RoutingRule.field_mappings)).order_by(RoutingRule.priority)
     rules = (await session.exec(stmt)).all()
+    redis_client = redis.from_url(settings.REDIS_URL)
+    cache = CacheManager(redis_client)
+    jira_client = JiraClient()
 
     # Fetch dynamic Jira projects for the dropdown
     jira_client = JiraClient()
@@ -354,10 +362,15 @@ async def rules_dashboard(
 
     # 3. Pass the argument to the client
     try:
-        jira_projects = await jira_client.get_all_projects()
-        issuetype_map = await jira_client.get_issue_type_map()
+        jira_projects = await cache.get_swr("jira:projects", jira_client.get_all_projects)
+        issuetype_map = await cache.get_swr("jira:issuetypes", jira_client.get_issue_type_map)
+    except Exception as e:
+        logger.error(f"Failed to fetch Jira metadata: {e}")
+        jira_projects = []
+        issuetype_map = {}
     finally:
         await jira_client.close()
+        await redis_client.aclose()
 
     # Extract the example payload from your Pydantic Model.
     # If using Pydantic v2 model_json_schema:
@@ -511,11 +524,11 @@ async def edit_routing_rule_modal(
     rule = (await session.exec(stmt)).first()
     if not rule:
         raise HTTPException(status_code=404, detail="Routing rule not found.")
-
+    redis_client = redis.from_url(settings.REDIS_URL)
+    cache = CacheManager(redis_client)
     jira_client = JiraClient()
     redis_pool = getattr(request.app.state, "arq_pool", None)
     resolver = FieldDataResolver(jira_client, redis_pool)
-
     required_fields = []
     optional_fields = []
     jira_projects = []
@@ -531,29 +544,32 @@ async def edit_routing_rule_modal(
     current_issuetype = existing_mappings.get("issuetype", "")
 
     try:
-        jira_projects = await jira_client.get_all_projects()
-        issuetype_map = await jira_client.get_issue_type_map()
-
+        jira_projects = await cache.get_swr("jira:projects", jira_client.get_all_projects)
+        issuetype_map = await cache.get_swr("jira:issuetypes", jira_client.get_issue_type_map)
         if rule.target_jira_project:
-            try:
+            # Inline closure to delay execution for SWR wrapper
+            async def fetch_project_issuetypes() -> list[dict[str, Any]]:
                 resp = await jira_client.client.get(f"/rest/api/3/project/{rule.target_jira_project}")
                 resp.raise_for_status()
-                current_project_issuetypes = [
-                    it for it in resp.json().get("issueTypes", []) if not it.get("subtask", False)
-                ]
-            except Exception as e:
-                logger.error(f"Failed to fetch issue types for project {rule.target_jira_project}: {e}")
+                return [it for it in resp.json().get("issueTypes", []) if not it.get("subtask", False)]
 
+            current_project_issuetypes = await cache.get_swr(
+                f"jira:project:{rule.target_jira_project}:issuetypes", fetch_project_issuetypes
+            )
             if current_issuetype:
                 schema = await resolver._get_createmeta(rule.target_jira_project, current_issuetype)
                 required_fields, optional_fields = _parse_jira_schema_fields(schema)
 
     except Exception as e:
-        logger.error(f"Failed to load schema for edit modal: {e}")
+        logger.error(f"Failed to fetch Jira metadata: {e}")
+        jira_projects = []
+        issuetype_map = {}
     finally:
         await jira_client.close()
+        await redis_client.aclose()
 
-    return templates.TemplateResponse(
+    # 2. Profile Template Rendering
+    response = templates.TemplateResponse(
         "partials/_rule_form_modal.html",
         {
             "request": request,
@@ -567,6 +583,8 @@ async def edit_routing_rule_modal(
             "optional_fields": optional_fields,
         },
     )
+
+    return response
 
 
 @router.post("/rules/routing/{rule_id}", response_class=HTMLResponse)
@@ -1014,13 +1032,16 @@ async def new_routing_rule_modal(
 ) -> HTMLResponse:
     """Provides an unhydrated modal for creating a new Routing Rule."""
     jira_client = JiraClient()
+    redis_client = redis.from_url(settings.REDIS_URL)
+    cache = CacheManager(redis_client)
     try:
-        jira_projects = await jira_client.get_all_projects()
+        jira_projects = await cache.get_swr("jira:projects", jira_client.get_all_projects)
     except Exception as e:
-        logger.error(f"Failed to fetch Jira projects for new rule modal: {e}")
+        logger.error(f"Failed to fetch Jira metadata: {e}")
         jira_projects = []
     finally:
         await jira_client.close()
+        await redis_client.aclose()
 
     return templates.TemplateResponse(
         "partials/_rule_form_modal.html",
@@ -1033,4 +1054,44 @@ async def new_routing_rule_modal(
             "required_fields": [],
             "optional_fields": [],
         },
+    )
+
+
+@router.post("/cache/purge", response_class=HTMLResponse)
+async def purge_jira_cache(request: Request, user: dict[str, Any] = Depends(require_system_admin)) -> HTMLResponse:
+    """Instantly evicts all Jira metadata keys from Redis."""
+    redis_client = redis.from_url(settings.REDIS_URL)
+    try:
+        keys = await redis_client.keys("jira:*")
+        if keys:
+            await redis_client.delete(*keys)
+        return templates.TemplateResponse(
+            "partials/_toast.html",
+            {"request": request, "level": "success", "message": f"Purged {len(keys)} Jira cache keys."},
+        )
+    except Exception as e:
+        logger.error(f"Failed to purge Redis cache: {e}")
+        return templates.TemplateResponse(
+            "partials/_toast.html",
+            {"request": request, "level": "danger", "message": f"Cache purge failed: {e}"},
+        )
+    finally:
+        await redis_client.aclose()
+
+
+@router.post("/cache/refresh", response_class=HTMLResponse)
+async def refresh_jira_cache(request: Request, user: dict[str, Any] = Depends(require_system_admin)) -> HTMLResponse:
+    """Enqueues an ARQ task to rebuild the Jira metadata cache asynchronously."""
+    arq_pool = getattr(request.app.state, "arq_pool", None)
+    if not arq_pool:
+        return templates.TemplateResponse(
+            "partials/_toast.html",
+            {"request": request, "level": "danger", "message": "ARQ Pool offline. Cannot enqueue refresh."},
+        )
+
+    await arq_pool.enqueue_job("warm_jira_metadata_cache_task", _queue_name="pf_jira_queue")
+
+    return templates.TemplateResponse(
+        "partials/_toast.html",
+        {"request": request, "level": "success", "message": "Cache refresh job queued."},
     )

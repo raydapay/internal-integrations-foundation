@@ -11,6 +11,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 # Ensure canonical imports are resolved
 import src.domain.users.models  # noqa: F401
 from src.config.settings import settings
+from src.core.clients import HTTPClientManager
 from src.domain.pf_jira.models import DomainConfig
 
 
@@ -81,3 +82,5 @@ class BaseTest(unittest.IsolatedAsyncioTestCase):
             await conn.run_sync(SQLModel.metadata.drop_all)
 
         await self.test_engine.dispose()
+        # Purge the global HTTP connection pool between tests to prevent socket leaks
+        await HTTPClientManager.teardown()

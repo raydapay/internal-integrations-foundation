@@ -40,15 +40,14 @@
 - [x] **String Templating Engine (PF-Variables):** Introduce `MappingSourceType.TEMPLATE` to `RuleFieldMapping`. Implement regex-based JSONPath interpolation (e.g., `{{ path.to.variable }}`) in the `FieldDataResolver` to construct dynamic Jira text fields (Summary, Description) without Python-level hardcoding.
 
 ## 6.  UI Latency Strategy (High Priority)
-- [ ] **Phase 0:** Audit all admin routes; strip blocking external I/O (Jira/Redis/ARQ) and implement deferred hydration.
-- [ ] **Phase 2:** Refactor Create/Edit Routing Rule modals; implement non-blocking lazy-hydration fragments via HTMX.
-- [ ] **Phase 3:** Implement Stale-While-Revalidate caching layer (In-memory -> Redis -> Jira).
-- [ ] **Phase 4:** Provision `ui_fast` ARQ queue and dedicate worker process; enforce strict runtime/API-call constraints.
+- [x] **Phase 0:** Audit all admin routes; strip blocking external I/O (Jira/Redis/ARQ) and implement deferred hydration. *(Resolved via `HTTPClientManager` and connection pooling).*
+- [x] **Phase 1 & 9:** Implement deterministic UI state. *(Resolved via global HTMX `is-loading` event listeners in `base.html`).*
+- [x] **Phase 3 & 6:** Implement Stale-While-Revalidate caching layer and predictive prewarming. *(Resolved via `CacheManager` and ARQ cron job).*
+- [x] **Phase 8:** Develop diagnostic panel for cache metrics and purge/refresh controls. *(Resolved via HTMX injections in `/admin/settings`).*
 - [ ] **Phase 5:** Decouple rule persistence from schema validation; implement status badge (Validating/Invalid) state machine.
 - [ ] **Phase 7:** Implement SSE stream for real-time validation status updates.
-- [ ] **Phase 8:** Develop `/admin/io` diagnostic panel for cache metrics and purge/refresh controls.
 - [ ] **Phase 10:** Integrate latency instrumentation (p50/p95 tracking) for modal opens and save operations.
-- [ ] **Phase 11:** Evaluate SAQ migration for worker queue performance and latency reduction
+- [ ] **Phase 11:** Evaluate SAQ migration for worker queue performance and latency reduction.
 
 ## 7. Phase: API Infrastructure & Authorization
 

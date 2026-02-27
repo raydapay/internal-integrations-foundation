@@ -141,6 +141,37 @@
 
             </div>
 
+            <hr class="my-5">
+            <h3 class="title is-5">Cache Management</h3>
+            <p class="subtitle is-6 text-muted mb-4">Control the Stale-While-Revalidate (SWR) Jira metadata cache.</p>
+
+            <div class="columns is-vcentered">
+                <div class="column is-narrow">
+                    <button type="button" class="button is-warning is-outlined"
+                            hx-post="/admin/cache/refresh"
+                            hx-target="#toast-container"
+                            hx-swap="beforeend">
+                        <span class="icon is-small">🔄</span>
+                        <span>Refresh Jira Cache (Background)</span>
+                    </button>
+                </div>
+                <div class="column is-narrow">
+                    <button type="button" class="button is-danger is-outlined"
+                            hx-post="/admin/cache/purge"
+                            hx-target="#toast-container"
+                            hx-swap="beforeend"
+                            hx-confirm="Force a cold start? The next UI load will block until Jira responds.">
+                        <span class="icon is-small">🗑️</span>
+                        <span>Purge Metadata Cache</span>
+                    </button>
+                </div>
+                <div class="column">
+                    <p class="is-size-7 has-text-grey">
+                        Purging deletes all <code>jira:createmeta</code>, <code>jira:projects</code>, and <code>jira:issuetypes</code> keys from Redis.
+                    </p>
+                </div>
+            </div>
+
             <div class="field mt-5">
                 <div class="control">
                     <button type="submit" class="button is-primary">Save Configuration</button>

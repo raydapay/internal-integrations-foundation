@@ -1,11 +1,34 @@
 import json
-from typing import Any
+import threading
+from typing import Any, ClassVar
 
 import httpx
 from fastapi import status
 from loguru import logger
 
 from src.config.settings import settings
+
+
+class HTTPClientManager:
+    """Manages singleton httpx.AsyncClient instances across concurrent execution contexts."""
+
+    _clients: ClassVar[dict[str, httpx.AsyncClient]] = {}
+    _lock: ClassVar[threading.Lock] = threading.Lock()
+
+    @classmethod
+    def get_client(cls, base_url: str, headers: dict[str, str], auth: tuple[str, str] | None) -> httpx.AsyncClient:
+        """Retrieves or initializes a thread-safe connection pool."""
+        with cls._lock:
+            if base_url not in cls._clients:
+                cls._clients[base_url] = httpx.AsyncClient(base_url=base_url, headers=headers, auth=auth, timeout=15.0)
+            return cls._clients[base_url]
+
+    @classmethod
+    async def teardown(cls) -> None:
+        """Gracefully closes all underlying TCP transports."""
+        for client in cls._clients.values():
+            await client.aclose()
+        cls._clients.clear()
 
 
 class BaseClient:
@@ -19,10 +42,17 @@ class BaseClient:
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.headers = headers or {}
-        self.client = httpx.AsyncClient(base_url=self.base_url, headers=self.headers, auth=auth, timeout=15.0)
+        # self.client = httpx.AsyncClient(base_url=self.base_url, headers=self.headers, auth=auth, timeout=15.0)
+        self.client = HTTPClientManager.get_client(self.base_url, self.headers, auth)
 
     async def close(self) -> None:
-        await self.client.aclose()
+        """
+        No-op.
+        The underlying httpx.AsyncClient is shared across all requests.
+        This neutralizes the 'finally: await client.close()' calls in routes,
+        preventing the destruction of the persistent connection pool.
+        """
+        pass
 
 
 class NotificationClient(BaseClient):
@@ -217,7 +247,9 @@ class JiraClient(BaseClient):
             return response.json()
         except httpx.HTTPStatusError as e:
             if e.response.status_code == status.HTTP_400_BAD_REQUEST:
-                logger.error(f"Jira 400 | Payload: {json.dumps(payload,ensure_ascii=False)} | Error: {e.response.text}")
+                logger.error(
+                    f"Jira 400 | Payload: {json.dumps(payload, ensure_ascii=False)} | Error: {e.response.text}"
+                )
             if response.status_code >= status.HTTP_400_BAD_REQUEST:
                 logger.error(f"Jira API rejected payload [{response.status_code}]: {response.text}")
             raise e

@@ -18,7 +18,7 @@ from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from src.config.settings import settings
-from src.core.clients import JiraClient, PeopleForceClient
+from src.core.clients import HTTPClientManager, JiraClient, PeopleForceClient
 from src.core.database import async_session_maker, engine
 from src.core.logger import configure_logging
 from src.core.notifications import notify
@@ -927,6 +927,52 @@ async def system_health_check_task(ctx: dict[Any, Any]) -> dict[str, Any]:
     return {"status": "executed", "alerts_dispatched": len(alerts)}
 
 
+# Add to imports in src/domain/pf_jira/tasks.py if not present
+# from arq import cron
+
+
+async def warm_jira_metadata_cache_task(ctx: dict[Any, Any]) -> dict[str, Any]:
+    """Proactively fetches and caches global Jira metadata to eliminate UI blocking.
+
+    Args:
+        ctx: The ARQ worker context containing the Redis connection.
+
+    Returns:
+        dict[str, Any]: Execution telemetry.
+
+    Raises:
+        Retry: If the Jira API is unreachable.
+    """
+    job_id = ctx.get("job_id", "unknown")
+    task_logger = logger.bind(job_id=job_id, operation="warm_cache")
+
+    redis_client = ctx["redis"]
+    jira_client = JiraClient()
+    stats = {"projects": 0, "issuetypes": 0, "status": "completed"}
+
+    try:
+        task_logger.info("Executing Jira metadata cache refresh...")
+
+        projects = await jira_client.get_all_projects()
+        issuetypes = await jira_client.get_issue_type_map()
+
+        ttl = 86400 * 7  # 7 days
+        await redis_client.setex("jira:projects", ttl, json.dumps(projects))
+        await redis_client.setex("jira:issuetypes", ttl, json.dumps(issuetypes))
+
+        stats["projects"] = len(projects)
+        stats["issuetypes"] = len(issuetypes)
+        task_logger.info(f"Cache warmed: {len(projects)} projects, {len(issuetypes)} issuetypes.")
+
+    except Exception as e:
+        task_logger.error(f"Failed to refresh Jira cache: {e}")
+        raise Retry(defer=ctx.get("job_try", 1) * 10) from e
+    finally:
+        await jira_client.close()
+
+    return stats
+
+
 class WorkerSettings:
     functions: ClassVar[list[Any]] = [
         sync_pf_to_jira_task,
@@ -934,6 +980,7 @@ class WorkerSettings:
         validate_routing_rules_task,
         system_health_check_task,
         zombie_recovery_task,
+        warm_jira_metadata_cache_task,
     ]
     # --- LATENCY OPTIMIZATIONS ---
     poll_delay: ClassVar[float] = 0.05  # Reduce check interval from 0.5s to 0.05s
@@ -948,6 +995,7 @@ class WorkerSettings:
         cron(sync_pf_to_jira_task, minute=set(range(60))),
         cron(system_health_check_task, minute=set(range(60))),
         cron(zombie_recovery_task, hour={3}, minute={0}),
+        cron(warm_jira_metadata_cache_task, hour={2}, minute={30}),
     ]
 
     @staticmethod
@@ -980,3 +1028,4 @@ class WorkerSettings:
         logger.info("PF-Jira Worker shutting down")
         if "redis" in ctx:
             await ctx["redis"].aclose()
+        await HTTPClientManager.teardown()

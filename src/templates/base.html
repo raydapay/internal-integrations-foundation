@@ -242,6 +242,40 @@
             }
         });
     </script>
+    <script>
+    // Global HTMX Request Interceptor for Deterministic Loading States
+    document.body.addEventListener('htmx:beforeRequest', function(evt) {
+        const triggerEl = evt.detail.elt;
+
+        // Prevent double-submission and inject Bulma spinner
+        if (triggerEl && triggerEl.tagName === 'BUTTON') {
+            triggerEl.classList.add('is-loading');
+            triggerEl.setAttribute('disabled', 'true');
+        } else if (triggerEl && triggerEl.tagName === 'FORM') {
+            const submitBtn = triggerEl.querySelector('button[type="submit"]');
+            if (submitBtn) {
+                submitBtn.classList.add('is-loading');
+                submitBtn.setAttribute('disabled', 'true');
+            }
+        }
+    });
+
+    document.body.addEventListener('htmx:afterRequest', function(evt) {
+        const triggerEl = evt.detail.elt;
+
+        // Restore interactive state
+        if (triggerEl && triggerEl.tagName === 'BUTTON') {
+            triggerEl.classList.remove('is-loading');
+            triggerEl.removeAttribute('disabled');
+        } else if (triggerEl && triggerEl.tagName === 'FORM') {
+            const submitBtn = triggerEl.querySelector('button[type="submit"]');
+            if (submitBtn) {
+                submitBtn.classList.remove('is-loading');
+                submitBtn.removeAttribute('disabled');
+            }
+        }
+    });
+</script>
 </body>
 </html>
 

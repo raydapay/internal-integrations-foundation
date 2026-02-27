@@ -20,7 +20,7 @@ from src.app.admin import router as admin_router
 from src.app.webhooks import router as webhook_router
 from src.config.settings import settings
 from src.core.broadcaster import configure_sse_logger
-from src.core.clients import NotificationClient
+from src.core.clients import HTTPClientManager, NotificationClient
 from src.core.database import engine
 from src.core.logger import configure_logging
 from src.domain.pf_jira.router import router as pf_jira_router
@@ -45,6 +45,7 @@ async def lifespan(app: FastAPI):
 
     # Teardown
     await app.state.arq_pool.close()
+    await HTTPClientManager.teardown()
 
 
 # --- Application Setup ---
