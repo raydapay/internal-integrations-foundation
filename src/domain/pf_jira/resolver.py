@@ -256,9 +256,13 @@ class FieldDataResolver:
                 text_node = {"type": "text", "text": clean_line.strip("*") if is_bold else clean_line}
 
                 if is_bold:
-                    text_node["marks"] = [{"type": "bold"}]
+                    text_node["marks"] = [{"type": "strong"}]
 
                 content.append(text_node)
+            else:
+                # ADF schema invalidates empty paragraph content arrays.
+                # Inject a blank space to preserve the visual line break.
+                content.append({"type": "text", "text": " "})
 
             paragraphs.append({"type": "paragraph", "content": content})
 
@@ -278,7 +282,8 @@ class FieldDataResolver:
             return None
 
         account_id = await self._resolve_account_id(safe_val)
-        return {"id": account_id} if account_id else None
+        # Jira Cloud v3 strictly requires 'accountId' instead of 'id'
+        return {"accountId": account_id} if account_id else None
 
     def _format_array(self, value: Any) -> list[str] | Any:
         """Parses comma-separated strings or lists into an array of strings."""

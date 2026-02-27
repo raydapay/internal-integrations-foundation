@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 import httpx
@@ -210,13 +211,16 @@ class JiraClient(BaseClient):
 
     async def create_issue(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Creates a new issue in Jira."""
-        response = await self.client.post("/rest/api/3/issue", json=payload)
-
-        if response.status_code >= status.HTTP_400_BAD_REQUEST:
-            logger.error(f"Jira API rejected payload [{response.status_code}]: {response.text}")
-
-        response.raise_for_status()
-        return response.json()
+        try:
+            response = await self.client.post("/rest/api/3/issue", json=payload)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == status.HTTP_400_BAD_REQUEST:
+                logger.error(f"Jira 400 | Payload: {json.dumps(payload,ensure_ascii=False)} | Error: {e.response.text}")
+            if response.status_code >= status.HTTP_400_BAD_REQUEST:
+                logger.error(f"Jira API rejected payload [{response.status_code}]: {response.text}")
+            raise e
 
     async def ping(self) -> tuple[bool, str]:
         """Verifies API connectivity and authentication validity.

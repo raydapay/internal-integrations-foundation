@@ -50,7 +50,7 @@ class TestFieldDataResolver(unittest.IsolatedAsyncioTestCase):
         payload = await self.resolver.build_payload(self.rule, self.pf_payload)
 
         self.assertEqual(payload["fields"]["issuetype"], {"id": "10001"})
-        self.assertEqual(payload["fields"]["assignee"], {"id": "12345-abcde"})
+        self.assertEqual(payload["fields"]["assignee"], {"accountId": "12345-abcde"})
         self.assertEqual(payload["fields"]["labels"], ["PF", "Onboarding"])
         self.assertEqual(payload["fields"]["summary"], "New Hire")
 
@@ -65,7 +65,6 @@ class TestFieldDataResolver(unittest.IsolatedAsyncioTestCase):
         mock_user_resp = MagicMock()
         mock_user_resp.json.return_value = [{"accountId": "12345-abcde"}]
 
-        # 🟢 FIXED: Explicitly bind as AsyncMock
         self.mock_jira.client.get = AsyncMock(return_value=mock_user_resp)
 
         with self.assertRaises(SchemaValidationError):
@@ -85,7 +84,6 @@ class TestFieldDataResolver(unittest.IsolatedAsyncioTestCase):
         mock_user_resp.json.return_value = [{"accountId": "12345-abcde"}]
         mock_user_resp.raise_for_status.return_value = None
 
-        # 🟢 FIXED: Explicitly bind as AsyncMock
         self.mock_jira.client.get = AsyncMock(return_value=mock_user_resp)
 
         self.rule.field_mappings.append(
@@ -175,10 +173,10 @@ class TestFieldDataResolver(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res["content"][0]["content"][0]["text"], "Line 1")
         self.assertEqual(res["content"][1]["content"][0]["text"], "Line 2")
 
-        # None/Null coercion
+        # None/Null coercion now yields a schema-compliant space-padded paragraph
         res_none = self.resolver._format_doc(None)
         self.assertEqual(len(res_none["content"]), 1)
-        self.assertEqual(res_none["content"][0]["content"], [])
+        self.assertEqual(res_none["content"][0]["content"], [{"type": "text", "text": " "}])
 
     def test_format_date(self) -> None:
         """Verifies date field strict null-coercion."""
@@ -202,7 +200,7 @@ class TestFieldDataResolver(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await self.resolver._format_user(None))
         self.assertIsNone(await self.resolver._format_user("   "))
 
-        self.assertEqual(await self.resolver._format_user("ray@todapay.com"), {"id": "acc-123"})
+        self.assertEqual(await self.resolver._format_user("ray@todapay.com"), {"accountId": "acc-123"})
         self.resolver._resolve_account_id.assert_called_once_with("ray@todapay.com")
 
     def test_validate_allowed_values_isolation(self) -> None:
@@ -218,18 +216,27 @@ class TestFieldDataResolver(unittest.IsolatedAsyncioTestCase):
             self.resolver._validate_allowed_values("Marketing", schema, "customfield_1")
 
     def test_format_doc_bold_support(self) -> None:
-        """Verifies that lines wrapped in asterisks are converted to bold ADF marks."""
+        """Verifies that lines wrapped in asterisks are converted to strong ADF marks."""
         res = self.resolver._format_doc("*Bold Header*\nRegular line")
 
         # Check Bold Node
         bold_node = res["content"][0]["content"][0]
         self.assertEqual(bold_node["text"], "Bold Header")
-        self.assertEqual(bold_node["marks"][0]["type"], "bold")
+        self.assertEqual(bold_node["marks"][0]["type"], "strong")
 
         # Check Regular Node
         reg_node = res["content"][1]["content"][0]
         self.assertEqual(reg_node["text"], "Regular line")
         self.assertNotIn("marks", reg_node)
+
+    def test_format_doc_empty_lines(self) -> None:
+        """Ensure empty lines are padded with a space to satisfy ADF paragraph rules."""
+        res = self.resolver._format_doc("Line 1\n\nLine 3")
+
+        # Isolate the empty line paragraph (index 1)
+        empty_paragraph = res["content"][1]
+
+        self.assertEqual(empty_paragraph["content"][0]["text"], " ")
 
 
 if __name__ == "__main__":

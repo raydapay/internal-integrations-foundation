@@ -11,7 +11,7 @@
 - [x] **Reactive Cache Invalidation (The 400 Trap):** Wrapped issue mutation in an HTTP 400 interceptor to surgically purge stale Redis `createmeta` cache keys and trigger self-healing ARQ retries.
 - [x] **Rule Editing:** Implement a Bulma modal containing an HTMX-powered form to edit existing rules without deletion/recreation.
 
-- [ ] **UI Enhancement:** Upgrade the "Select Jira Board" HTML `<select>` into a live-filterable searchable dropdown. *(Note: Custom Vanilla JS wrapper rejected. Evaluate robust, dependency-light alternatives like Tom Select or a native Bulma extension).*
+- [x] **UI Enhancement:** Upgrade the "Select Jira Board" HTML `<select>` into a live-filterable searchable dropdown. *(Note: Custom Vanilla JS wrapper rejected. Evaluate robust, dependency-light alternatives like Tom Select or a native Bulma extension).*
 
 ## 2. Platform Architecture (Dynamic State & Plugin Pivot)
 - [x] **Configuration Data Model:** Create a `DomainConfig` SQLite table to hold the Master Switch, Polling Interval, and Fallback Projects, isolating mutable state from `settings.py`.
@@ -38,3 +38,49 @@
 ## 5. Configuration Maturity & De-Hardcoding
 - [x] **Externalize Integration Lineage:** Expand `DomainConfig` to own integration-specific identifiers (e.g., `jira_tracking_label`, `jira_entity_property_key`), removing hardcoded "PeopleForce" magic strings from the ARQ workers and JQL reverse-vector sweeps.
 - [x] **String Templating Engine (PF-Variables):** Introduce `MappingSourceType.TEMPLATE` to `RuleFieldMapping`. Implement regex-based JSONPath interpolation (e.g., `{{ path.to.variable }}`) in the `FieldDataResolver` to construct dynamic Jira text fields (Summary, Description) without Python-level hardcoding.
+
+## 6.  UI Latency Strategy (High Priority)
+- [ ] **Phase 0:** Audit all admin routes; strip blocking external I/O (Jira/Redis/ARQ) and implement deferred hydration.
+- [ ] **Phase 2:** Refactor Create/Edit Routing Rule modals; implement non-blocking lazy-hydration fragments via HTMX.
+- [ ] **Phase 3:** Implement Stale-While-Revalidate caching layer (In-memory -> Redis -> Jira).
+- [ ] **Phase 4:** Provision `ui_fast` ARQ queue and dedicate worker process; enforce strict runtime/API-call constraints.
+- [ ] **Phase 5:** Decouple rule persistence from schema validation; implement status badge (Validating/Invalid) state machine.
+- [ ] **Phase 7:** Implement SSE stream for real-time validation status updates.
+- [ ] **Phase 8:** Develop `/admin/io` diagnostic panel for cache metrics and purge/refresh controls.
+- [ ] **Phase 10:** Integrate latency instrumentation (p50/p95 tracking) for modal opens and save operations.
+- [ ] **Phase 11:** Evaluate SAQ migration for worker queue performance and latency reduction
+
+## 7. Phase: API Infrastructure & Authorization
+
+- [ ] **Core API Architecture & Refactoring**
+    - [ ] Initialize `/api` route namespace in a dedicated module (`routes/api.py`).
+    - [ ] Refactor business logic (Rule CRUD, Settings, Sync Toggles) into a shared `Service Layer` to ensure parity between Web and API interfaces.
+    - [ ] Implement Pydantic models for request/response serialization and strict schema validation.
+    - [ ] Decouple current session-based web routes from core logic to allow dual-entry points.
+
+- [ ] **Hybrid Security & Auth Implementation**
+    - [ ] **HMAC Engine:**
+        - [ ] Implement SHA-256 signature verification middleware.
+        - [ ] Canonicalization string: `Method + Path + RawBody + Timestamp`.
+        - [ ] Implement ± 60s timestamp window check to mitigate clock drift issues.
+    - [ ] **Hybrid Auth Router:**
+        - [ ] Develop middleware to check for `X-Signature` (HMAC) or `Authorization: Bearer` headers.
+        - [ ] Implement IP-CIDR whitelisting decorator specifically for Bearer token usage.
+    - [ ] **Replay Protection:** Integrate Redis-backed nonce/Request-ID tracking for HMAC requests.
+
+- [ ] **Credential Management (UI & Logic)**
+    - [ ] Extend DB schema for `api_credentials`:
+        - `client_id`, `secret_hash`, `type` (HMAC/Bearer), `allowed_ips` (JSON/CIDR list), `scopes`, `status`, `last_used_at`.
+    - [ ] **Admin Dashboard Update:**
+        - [ ] Create view for generating/revoking API credentials.
+        - [ ] Implement "Secret Reveal" logic (one-time view) and secret hashing (PBKDF2/Argon2) for storage.
+        - [ ] Support for secondary secrets to facilitate zero-downtime rotation.
+
+- [ ] **Automation & Developer Experience (DX)**
+    - [ ] **`api-curl.sh` Helper Script:**
+        - [ ] Create a POSIX-compliant wrapper for `curl` that automates signing.
+        - [ ] Requirements: OpenSSL for HMAC, environment variable support for secrets.
+    - [ ] **Documentation:**
+        - [ ] Add "API Reference" section to internal docs.
+        - [ ] Provide copy-pasteable examples for Bash (via helper) and Python (signing class).
+    - [ ] Implement an authenticated `/api/v1/debug/whoami` endpoint for credential verification."""

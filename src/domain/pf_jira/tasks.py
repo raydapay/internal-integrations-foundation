@@ -207,7 +207,7 @@ async def _handle_issue_creation(sync_ctx: SyncContext, task_ctx: TaskContext, j
 
     # 1. Assignee Fallback Logic (Keep this as a failsafe if dynamic mapping is empty)
     if "assignee" not in jira_payload["fields"] and sync_ctx.config.jira_fallback_account_id:
-        jira_payload["fields"]["assignee"] = {"id": sync_ctx.config.jira_fallback_account_id}
+        jira_payload["fields"]["assignee"] = {"accountId": sync_ctx.config.jira_fallback_account_id}
 
     # 2. Immutable Data Lineage & Folksonomy (Dynamic Config)
     jira_payload["properties"] = [
@@ -278,7 +278,7 @@ async def _handle_issue_update(
 
     if "assignee" not in update_fields:
         if sync_ctx.config.jira_fallback_account_id:
-            update_fields["assignee"] = {"id": sync_ctx.config.jira_fallback_account_id}
+            update_fields["assignee"] = {"accountId": sync_ctx.config.jira_fallback_account_id}
         else:
             update_fields["assignee"] = None  # Explicitly unassign if mapping fails or is empty
 
@@ -935,6 +935,9 @@ class WorkerSettings:
         system_health_check_task,
         zombie_recovery_task,
     ]
+    # --- LATENCY OPTIMIZATIONS ---
+    poll_delay: ClassVar[float] = 0.05  # Reduce check interval from 0.5s to 0.05s
+    max_jobs: ClassVar[int] = 10  # Allow 10 concurrent tasks
     redis_settings: ClassVar[Any] = RedisSettings.from_dsn(settings.REDIS_URL)
     queue_name: ClassVar[str] = "pf_jira_queue"
     health_check_key: ClassVar[str] = "arq:worker:pf_jira"
