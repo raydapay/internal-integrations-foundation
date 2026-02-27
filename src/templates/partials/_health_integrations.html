@@ -1,0 +1,40 @@
+<table class="table is-fullwidth is-narrow">
+    <tbody>
+        <tr>
+            <th>PeopleForce v3</th>
+            <td>
+                <span class="tag is-{{ 'success' if integrations.peopleforce.status == 'OK' else 'danger' }}">
+                    {{ integrations.peopleforce.status }}
+                </span>
+                <div class="is-size-7 mt-1 has-text-grey">{{ integrations.peopleforce.detail }}</div>
+            </td>
+        </tr>
+        <tr>
+            <th>Jira Cloud v3</th>
+            <td>
+                <span class="tag is-{{ 'success' if integrations.jira.status == 'OK' else 'danger' }}">
+                    {{ integrations.jira.status }}
+                </span>
+                <div class="is-size-7 mt-1 has-text-grey">{{ integrations.jira.detail }}</div>
+            </td>
+        </tr>
+        <tr>
+            <th>Slack Webhook</th>
+            <td>
+                <span class="tag is-{{ integrations.slack.status_tag }}">
+                    {{ 'OK' if integrations.slack.status_tag == 'success' else integrations.slack.status_tag | upper }}
+                </span>
+                <div class="is-size-7 mt-1 has-text-grey">{{ integrations.slack.detail }}</div>
+            </td>
+        </tr>
+        <tr>
+            <th>Telegram Bot</th>
+            <td>
+                <span class="tag is-{{ integrations.telegram.status_tag }}">
+                    {{ 'OK' if integrations.telegram.status_tag == 'success' else integrations.telegram.status_tag | upper }}
+                </span>
+                <div class="is-size-7 mt-1 has-text-grey">{{ integrations.telegram.detail }}</div>
+            </td>
+        </tr>
+    </tbody>
+</table>

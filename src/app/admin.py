@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from loguru import logger
+from sqlalchemy import text
 from sqlalchemy.orm import selectinload
 from sqlmodel import desc, or_, select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -22,6 +23,7 @@ from src.config.settings import settings
 from src.core.broadcaster import log_broadcaster
 from src.core.clients import JiraClient, NotificationClient, PeopleForceClient
 from src.core.database import get_session
+from src.core.notifications import notify
 from src.core.utils import CacheManager, generate_highlighted_json
 from src.domain.pf_jira.models import (
     DomainConfig,
@@ -121,16 +123,16 @@ async def telemetry_dashboard(request: Request, user: dict[str, Any] = Depends(g
 
 
 @router.get("/health", response_class=HTMLResponse)
-async def system_health(request: Request, user: dict[str, Any] = Depends(get_current_user)) -> HTMLResponse:
-    """Aggregates hardware, infrastructure, and integration metrics."""
-
+async def system_health(
+    request: Request, user: dict[str, Any] = Depends(get_current_user), session: AsyncSession = Depends(get_session)
+) -> HTMLResponse:
+    """Aggregates hardware and infrastructure metrics instantly."""
     # 1. Hardware Metrics
     mem = psutil.virtual_memory()
     uptime_seconds = time.time() - psutil.boot_time()
     uptime_str = f"{int(uptime_seconds // 3600)}h {int((uptime_seconds % 3600) // 60)}m"
     disk = psutil.disk_usage("/")
 
-    # Handle OS-specific temperature limitations gracefully
     temps = "N/A (Windows/Unsupported)"
     if hasattr(psutil, "sensors_temperatures"):
         try:
@@ -151,24 +153,48 @@ async def system_health(request: Request, user: dict[str, Any] = Depends(get_cur
         "disk_total_gb": round(disk.total / (1024**3), 2),
     }
 
-    # 2. Infrastructure (ARQ Queue & Workers)
+    # 2. SQLite Health Check
+    db_status = "Online"
+    db_tag = "success"
+    try:
+        await asyncio.wait_for(session.exec(text("SELECT 1")), timeout=2.0)
+    except Exception as e:
+        db_status = f"Locked/Offline ({type(e).__name__})"
+        db_tag = "danger"
+
+    # 3. Infrastructure (ARQ Queue)
     arq_pool = getattr(request.app.state, "arq_pool", None)
     queue_depth = "Offline"
     workers_active = 0
 
     if arq_pool:
         try:
-            # ARQ 0.25+ exposes queued_jobs
             queued = await arq_pool.queued_jobs(queue_name="pf_jira_queue")
             queue_depth = f"{len(queued)} jobs"
-
-            # Fetch active worker heartbeats
             worker_keys = await arq_pool.keys("arq:worker:*")
             workers_active = len(worker_keys)
         except Exception:
             queue_depth = "Error reading queue"
 
-    # 3. Integration Pings (Concurrent execution)
+    return templates.TemplateResponse(
+        "health.html",
+        {
+            "request": request,
+            "user": user,
+            "hardware": hardware,
+            "db_status": db_status,
+            "db_tag": db_tag,
+            "queue_depth": queue_depth,
+            "workers_active": workers_active,
+        },
+    )
+
+
+@router.get("/health/integrations", response_class=HTMLResponse)
+async def integration_health_fragment(
+    request: Request, user: dict[str, Any] = Depends(get_current_user)
+) -> HTMLResponse:
+    """HTMX lazy-loaded fragment that safely blocks to ping external APIs."""
     pf_client = PeopleForceClient()
     jira_client = JiraClient()
     notify_client = NotificationClient()
@@ -188,15 +214,17 @@ async def system_health(request: Request, user: dict[str, Any] = Depends(get_cur
     }
 
     return templates.TemplateResponse(
-        "health.html",
-        {
-            "request": request,
-            "user": user,
-            "hardware": hardware,
-            "queue_depth": queue_depth,
-            "workers_active": workers_active,  # Inject the new variable here
-            "integrations": integrations,
-        },
+        "partials/_health_integrations.html", {"request": request, "integrations": integrations}
+    )
+
+
+@router.post("/health/test-alert", response_class=HTMLResponse)
+async def dispatch_test_alert(request: Request, user: dict[str, Any] = Depends(require_system_admin)) -> HTMLResponse:
+    """Dispatches a manual test notification to verify Slack/Telegram connectivity."""
+    await notify(f"🧪 *Manual Test Alert*\nTriggered by: `{user.get('email')}`\nAll observability channels are active.")
+    return templates.TemplateResponse(
+        "partials/_toast.html",
+        {"request": request, "level": "success", "message": "Test alert dispatched successfully."},
     )
 
 

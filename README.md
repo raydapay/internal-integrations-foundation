@@ -11,6 +11,8 @@ The system is strictly divided into two execution tiers to prevent I/O blocking 
 1. **The Unified Gateway (FastAPI):** Handles TLS termination, Google Workspace SSO, schema validation, and serving the Admin Dashboard via Jinja2 Server-Side Rendering (SSR).
 2. **Isolated Domain Workers (ARQ):** Background `asyncio` processes that execute third-party API communication, state-reconciliation hashing, and database mutations over Redis queues.
 
+*For a detailed breakdown of the synchronization polling, webhook cryptography, and Jira configuration, see [`docs/03-STATE_SYNC_MECHANICS.md`](docs/03-STATE_SYNC_MECHANICS.md).*
+
 ## 🛠️ Technical Stack
 
 Every technology choice was optimized for minimal Total Cost of Ownership (TCO) and high observability (see [`docs/02-TOOLING_DECISIONS.md`](docs/02-TOOLING_DECISIONS.md)).
@@ -29,6 +31,7 @@ Every technology choice was optimized for minimal Total Cost of Ownership (TCO) 
 * **Dynamic Mapping & JSONPath Injection:** SQLite-backed firewall rules evaluating conditions in $O(N)$ linear priority. Administrators can map static values or extract variables via JSONPath (`$.assigned_to.email`) directly into upstream API payloads.
 * **Self-Healing Schema Validation:** A `FieldDataResolver` pipeline that caches upstream schemas (e.g., Jira `createmeta`), proactively traps configuration drift, executes surgical Redis cache invalidations, and automatically trips circuit breakers to prevent data loss or infinite retry loops.
 * **State Reconciliation:** Distributed locking and SHA-256 state hashing to detect API deltas when native vendor webhooks are unavailable.
+* **Zero-Latency Interface:** The Gateway strictly prohibits blocking I/O within the FastAPI event loop. A multi-tier Stale-While-Revalidate (SWR) caching layer backed by persistent `httpx` connection pools guarantees that complex rule configurations render in `<50ms`, entirely isolating the user from upstream Atlassian network latency.
 
 ## 🚦 Quick Start
 
@@ -69,11 +72,6 @@ uv run arq src.domain.pf_jira.tasks.WorkerSettings --watch src
 * **Integration Dashboard:** [http://localhost:8000/admin](http://localhost:8000/admin)
 * **Log Aggregation (Seq):** [http://localhost:5341](http://localhost:5341)
 
-## 🏗️ Architectural Paradigm
-
-The system is strictly divided into two execution tiers to prevent I/O blocking and enforce domain isolation (see [`docs/01-SYSTEM_TOPOLOGY.md`](docs/01-SYSTEM_TOPOLOGY.md) for deeper systemic analysis).
-
-*For a detailed breakdown of the synchronization polling, webhook cryptography, and Jira configuration, see [`docs/03-STATE_SYNC_MECHANICS.md`](docs/03-STATE_SYNC_MECHANICS.md).*
 
 ## 📂 Project Structure
 

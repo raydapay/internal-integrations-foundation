@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from loguru import logger
+from sqlalchemy import text
 from sqlmodel import SQLModel
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -21,7 +22,7 @@ from src.app.webhooks import router as webhook_router
 from src.config.settings import settings
 from src.core.broadcaster import configure_sse_logger
 from src.core.clients import HTTPClientManager, NotificationClient
-from src.core.database import engine
+from src.core.database import async_session_maker, engine
 from src.core.logger import configure_logging
 from src.domain.pf_jira.router import router as pf_jira_router
 from src.domain.users.router import router as auth_router
@@ -165,36 +166,39 @@ async def home(request: Request) -> Response:
 
 @app.get("/api/v1/health", tags=["System"])
 async def api_health_check(request: Request) -> dict[str, Any]:
-    """Provides a strict JSON health payload for external monitors (e.g., Zabbix).
-
-    Returns:
-        dict[str, Any]: System versioning and infrastructure heartbeat metrics.
-    """
+    """Provides a strict JSON health payload for external monitors (e.g., Zabbix)."""
     arq_pool = getattr(request.app.state, "arq_pool", None)
     workers_alive = 0
 
     if arq_pool:
         try:
-            # Query Redis for ARQ's ephemeral worker heartbeat keys
             worker_keys = await arq_pool.keys("arq:worker:*")
             workers_alive = len(worker_keys)
         except Exception as e:
             logger.error(f"Failed to ping Redis for worker heartbeat: {e}")
 
-    # Flag degraded if no workers are alive to process the queues
-    status_flag = "ok" if workers_alive > 0 else "degraded"
+    # 1. SQLite Deadlock Check
+    db_status = "ok"
+    try:
+        async with async_session_maker() as session:
+            # 5-second aggressive timeout to catch WAL locking deadlocks
+            await asyncio.wait_for(session.exec(text("SELECT 1")), timeout=5.0)
+    except Exception as e:
+        logger.error(f"SQLite Health Check Failed (Deadlock/Locked): {e}")
+        db_status = "degraded"
 
+    # 2. External Pings
     notify_client = NotificationClient()
     try:
         slack_res, tg_res = await asyncio.gather(notify_client.ping_slack(), notify_client.ping_telegram())
-    except Exception as e:
-        logger.error(f"Health check external ping failed catastrophically: {e}")
+    except Exception:
         slack_res = ("danger", "Ping execution failed")
         tg_res = ("danger", "Ping execution failed")
     finally:
         await notify_client.close()
 
-    # Optional: If both notification channels are dead, the system cannot alert humans.
+    status_flag = "ok" if (workers_alive > 0 and db_status == "ok") else "degraded"
+
     if slack_res[0] == "danger" and tg_res[0] == "danger":
         status_flag = "degraded"
 
@@ -203,6 +207,7 @@ async def api_health_check(request: Request) -> dict[str, Any]:
         "service": settings.APP_NAME,
         "version": getattr(version, "VERSION", "unknown"),
         "workers_active": workers_alive,
+        "database": db_status,
         "integrations": {
             "slack": {"status": "ok" if slack_res[0] == "success" else slack_res[0], "detail": slack_res[1]},
             "telegram": {"status": "ok" if tg_res[0] == "success" else tg_res[0], "detail": tg_res[1]},

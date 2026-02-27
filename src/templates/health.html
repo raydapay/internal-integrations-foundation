@@ -21,6 +21,11 @@
             <h3 class="title is-5">Infrastructure</h3>
             <table class="table is-fullwidth is-narrow">
                 <tbody>
+                    <tr><th>SQLite Database</th>
+                        <td>
+                            <span class="tag is-{{ db_tag }}">{{ db_status }}</span>
+                        </td>
+                    </tr>
                     <tr><th>ARQ Redis Pool</th>
                         <td>
                             {% if queue_depth != "Offline" %}
@@ -39,25 +44,7 @@
                             {% endif %}
                         </td>
                     </tr>
-                    <tr><th>PF-Jira Queue Depth</th><td>{{ queue_depth }} jobs</td></tr>
-                    <tr>
-                        <th>Slack Webhook</th>
-                        <td>
-                            <span class="tag is-{{ integrations.slack.status_tag }}">
-                                {{ 'OK' if integrations.slack.status_tag == 'success' else integrations.slack.status_tag | upper }}
-                            </span>
-                            <div class="is-size-7 mt-1 has-text-grey">{{ integrations.slack.detail }}</div>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th>Telegram Bot</th>
-                        <td>
-                            <span class="tag is-{{ integrations.telegram.status_tag }}">
-                                {{ 'OK' if integrations.telegram.status_tag == 'success' else integrations.telegram.status_tag | upper }}
-                            </span>
-                            <div class="is-size-7 mt-1 has-text-grey">{{ integrations.telegram.detail }}</div>
-                        </td>
-                    </tr>
+                    <tr><th>PF-Jira Queue Depth</th><td>{{ queue_depth }}</td></tr>
                 </tbody>
             </table>
         </div>
@@ -65,29 +52,24 @@
 
     <div class="column is-one-third">
         <div class="box">
-            <h3 class="title is-5">API Integrations</h3>
-            <table class="table is-fullwidth is-narrow">
-                <tbody>
-                    <tr>
-                        <th>PeopleForce v3</th>
-                        <td>
-                            <span class="tag is-{{ 'success' if integrations.peopleforce.status == 'OK' else 'danger' }}">
-                                {{ integrations.peopleforce.status }}
-                            </span>
-                            <div class="is-size-7 mt-1 has-text-grey">{{ integrations.peopleforce.detail }}</div>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th>Jira Cloud v3</th>
-                        <td>
-                            <span class="tag is-{{ 'success' if integrations.jira.status == 'OK' else 'danger' }}">
-                                {{ integrations.jira.status }}
-                            </span>
-                            <div class="is-size-7 mt-1 has-text-grey">{{ integrations.jira.detail }}</div>
-                        </td>
-                    </tr>
-                </tbody>
-            </table>
+            <div class="is-flex is-justify-content-space-between is-align-items-center mb-3">
+                <h3 class="title is-5 mb-0">API Integrations</h3>
+                {% if user.role in ['system_admin'] %}
+                <button class="button is-small is-info is-outlined"
+                        hx-post="/admin/health/test-alert"
+                        hx-target="#toast-container"
+                        hx-swap="beforeend">
+                    Send Test Alert
+                </button>
+                {% endif %}
+            </div>
+
+            <div hx-get="/admin/health/integrations" hx-trigger="load" hx-swap="innerHTML">
+                <div class="has-text-centered py-5">
+                    <span class="icon is-large has-text-info"><i class="fas fa-circle-notch fa-spin fa-2x"></i></span>
+                    <p class="is-size-7 has-text-grey mt-2">Pinging external networks...</p>
+                </div>
+            </div>
         </div>
     </div>
 </div>
