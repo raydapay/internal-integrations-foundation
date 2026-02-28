@@ -24,6 +24,7 @@ from src.core.broadcaster import log_broadcaster
 from src.core.clients import JiraClient, NotificationClient, PeopleForceClient
 from src.core.database import get_session
 from src.core.notifications import notify
+from src.core.security import check_google_sso_config
 from src.core.utils import CacheManager, generate_highlighted_json
 from src.domain.pf_jira.models import (
     DomainConfig,
@@ -224,8 +225,12 @@ async def integration_health_fragment(
     notify_client = NotificationClient()
 
     try:
-        pf_res, jira_res, slack_res, tg_res = await asyncio.gather(
-            pf_client.ping(), jira_client.ping(), notify_client.ping_slack(), notify_client.ping_telegram()
+        pf_res, jira_res, slack_res, tg_res, sso_res = await asyncio.gather(
+            pf_client.ping(),
+            jira_client.ping(),
+            notify_client.ping_slack(),
+            notify_client.ping_telegram(),
+            check_google_sso_config(request),
         )
     finally:
         await asyncio.gather(pf_client.close(), jira_client.close(), notify_client.close())
@@ -235,6 +240,7 @@ async def integration_health_fragment(
         "jira": {"status": "OK" if jira_res[0] else "ERROR", "detail": jira_res[1]},
         "slack": {"status_tag": slack_res[0], "detail": slack_res[1]},
         "telegram": {"status_tag": tg_res[0], "detail": tg_res[1]},
+        "google_sso": {"status": "OK" if sso_res[0] else "ERROR", "detail": sso_res[1]},
     }
 
     return templates.TemplateResponse(

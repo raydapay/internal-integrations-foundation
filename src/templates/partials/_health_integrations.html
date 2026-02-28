@@ -36,5 +36,14 @@
                 <div class="is-size-7 mt-1 has-text-grey">{{ integrations.telegram.detail }}</div>
             </td>
         </tr>
+        <tr>
+            <th>Google Workspace SSO</th>
+            <td>
+                <span class="tag is-{{ 'success' if integrations.google_sso.status == 'OK' else 'danger' }}">
+                    {{ integrations.google_sso.status }}
+                </span>
+                <div class="is-size-7 mt-1 has-text-grey">{{ integrations.google_sso.detail }}</div>
+            </td>
+        </tr>
     </tbody>
 </table>
