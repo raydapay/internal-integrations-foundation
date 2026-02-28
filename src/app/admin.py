@@ -162,7 +162,28 @@ async def system_health(
         db_status = f"Locked/Offline ({type(e).__name__})"
         db_tag = "danger"
 
-    # 3. Infrastructure (ARQ Queue)
+    # 3. Redis Broker Metrics (INFO)
+    redis_metrics = {}
+    redis_status = "Offline"
+    redis_tag = "danger"
+    try:
+        redis_client = redis.from_url(settings.REDIS_URL)
+        # The info() method executes 'redis-cli INFO' and parses the output into a dict
+        info = await redis_client.info()
+        redis_metrics = {
+            "version": info.get("redis_version", "Unknown"),
+            "uptime_days": info.get("uptime_in_days", 0),
+            "clients": info.get("connected_clients", 0),
+            "memory_used": info.get("used_memory_human", "0B"),
+            "memory_peak": info.get("used_memory_peak_human", "0B"),
+        }
+        redis_status = "Online"
+        redis_tag = "success"
+        await redis_client.aclose()
+    except Exception as e:
+        redis_status = f"Offline ({type(e).__name__})"
+
+    # 4. Infrastructure (ARQ Queue)
     arq_pool = getattr(request.app.state, "arq_pool", None)
     queue_depth = "Offline"
     workers_active = 0
@@ -186,6 +207,9 @@ async def system_health(
             "db_tag": db_tag,
             "queue_depth": queue_depth,
             "workers_active": workers_active,
+            "redis_status": redis_status,
+            "redis_tag": redis_tag,
+            "redis_metrics": redis_metrics,  # <-- Pass metrics to template
         },
     )
 

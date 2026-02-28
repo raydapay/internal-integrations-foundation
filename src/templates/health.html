@@ -26,15 +26,19 @@
                             <span class="tag is-{{ db_tag }}">{{ db_status }}</span>
                         </td>
                     </tr>
-                    <tr><th>ARQ Redis Pool</th>
-                        <td>
-                            {% if queue_depth != "Offline" %}
-                            <span class="tag is-success">Connected</span>
-                            {% else %}
-                            <span class="tag is-danger">Disconnected</span>
-                            {% endif %}
-                        </td>
+
+                    <tr><th colspan="2" class="has-text-grey-light is-size-7 pt-4 pb-1">REDIS BROKER</th></tr>
+                    <tr><th>Service Status</th>
+                        <td><span class="tag is-{{ redis_tag }}">{{ redis_status }}</span></td>
                     </tr>
+                    {% if redis_status == 'Online' %}
+                    <tr><th>Engine Version</th><td>v{{ redis_metrics.version }}</td></tr>
+                    <tr><th>Uptime</th><td>{{ redis_metrics.uptime_days }} days</td></tr>
+                    <tr><th>Connected Clients</th><td>{{ redis_metrics.clients }}</td></tr>
+                    <tr><th>Memory Usage</th><td>{{ redis_metrics.memory_used }} (Peak: {{ redis_metrics.memory_peak }})</td></tr>
+                    {% endif %}
+
+                    <tr><th colspan="2" class="has-text-grey-light is-size-7 pt-4 pb-1">ARQ WORKER POOL</th></tr>
                     <tr><th>Active Domain Workers</th>
                         <td>
                             {% if workers_active > 0 %}

@@ -34,13 +34,13 @@ tests\test_clients.py               39      1    97%   76
 tests\test_database.py              40      1    98%   66
 tests\test_jira_cache.py            42      1    98%   98
 tests\test_jira_validation.py       48      0   100%
-tests\test_logger.py                66      2    97%   14, 125
+tests\test_logger.py                66     20    70%   11-15, 21, 24, 27-29, 32, 35, 38-42, 46, 50-52, 57, 60, 65, 69, 125
 tests\test_mapping.py               22      0   100%
 tests\test_notifications.py         74      1    99%   116
 tests\test_pf_jira_resolver.py     110      1    99%   243
 tests\test_pf_jira_router.py        31      1    97%   58
 tests\test_pf_jira_tasks.py        178      4    98%   104-106, 353
-tests\test_users_router.py          92      1    99%   160
+tests\test_users_router.py          92     12    87%   112, 125, 128, 133, 136, 141, 144, 147, 157-162
 tests\test_webhooks.py              91      1    99%   148
 --------------------------------------------------------------
-TOTAL                             3051    830    73%
+TOTAL                             3051    859    72%

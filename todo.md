@@ -20,7 +20,7 @@
 - [ ] **Decoupling:** Refactor `src/domain/` to support a dynamic plugin loader. Extract `pf_jira` into an isolated module that registers its own routers, workers, and menu items at startup.
 - [ ] **Stubs:** Outline and scaffold the file structures for future integrations: `plugins/telegram`, `plugins/slack`, `plugins/pipedrive`.
 - [x] **Alerting Service:** Implement a unified internal service to push critical fault notifications (e.g., worker death, network timeouts) to a dedicated Slack/Telegram webhook.
-- [ ] **Buetify Logs:** Get rid of all ugly log records like `<built-in method rollback of sqlite3.Connection object at 0x000001CC9D4924D0>` - async / await noice, turn them to beatiful meaningfull strings
+- [x] **Beeaytify Logs:** Get rid of all ugly log records like `<built-in method rollback of sqlite3.Connection object at 0x000001CC9D4924D0>` - async / await noise, turn them to beautiful meaningful strings
 
 ## 3. Testing & CI/CD
 - [x] **Firewall Matrix Testing:** Write unittests for the new `evaluate_routing_rules` linear evaluation logic to guarantee priority sorting and default fallbacks.
@@ -47,7 +47,7 @@
 - [ ] **Phase 5:** Decouple rule persistence from schema validation; implement status badge (Validating/Invalid) state machine.
 - [ ] **Phase 7:** Implement SSE stream for real-time validation status updates.
 - [ ] **Phase 10:** Integrate latency instrumentation (p50/p95 tracking) for modal opens and save operations.
-- [ ] **Phase 11:** Evaluate SAQ migration for worker queue performance and latency reduction.
+- [ ] **Phase 11:** Evaluate migration to [`SAQ`](https://saq-py.readthedocs.io/en/latest/) for worker queue performance and latency reduction.
 
 ## 7. Phase: API Infrastructure & Authorization
 
@@ -83,3 +83,5 @@
         - [ ] Add "API Reference" section to internal docs.
         - [ ] Provide copy-pasteable examples for Bash (via helper) and Python (signing class).
     - [ ] Implement an authenticated `/api/v1/debug/whoami` endpoint for credential verification."""
+## 8. Configuration & Technical Debt
+- [ ] **De-Hardcode Tenant Constants:** Strip all hardcoded tenant-specific strings (`todapay.com`, `todapay.atlassian.net`, `admin@todapay.com`) from the entire codebase, including Jinja templates (`src/templates/`) and the `tests/` directory. Replace with dynamic configuration variables (e.g., `settings.JIRA_BASE_URL`, `settings.TENANT_DOMAIN`).
