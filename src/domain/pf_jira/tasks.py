@@ -41,6 +41,30 @@ def _compute_hash(data: dict[str, Any]) -> str:
     return hashlib.sha256(serialized).hexdigest()
 
 
+def _extract_pf_search_context(pf_task: dict[str, Any]) -> str:
+    """Explicitly extracts high-signal searchable data from a PF Task payload."""
+    parts: list[str] = [str(pf_task.get("id", ""))]
+
+    if title := pf_task.get("title"):
+        parts.append(str(title))
+
+    if desc := pf_task.get("description_plain"):
+        parts.append(str(desc)[:512])
+
+    if associated := pf_task.get("associated_to"):
+        if isinstance(associated, dict):
+            parts.append(str(associated.get("email", "")))
+            parts.append(str(associated.get("full_name", "")))
+
+    if assignee := pf_task.get("assigned_to"):
+        if isinstance(assignee, dict):
+            parts.append(str(assignee.get("email", "")))
+            parts.append(str(assignee.get("full_name", "")))
+
+    # Filter out empty strings and normalize
+    return " | ".join(filter(lambda x: x and x.strip(), parts))
+
+
 async def _evaluate_polling_state(
     redis_client: redis.Redis, is_manual_trigger: bool
 ) -> tuple[dict[str, str] | None, DomainConfig | None]:
@@ -145,6 +169,7 @@ async def _execute_safe_jira_update(
                         {"error": "Jira 404 Not Found. Local state purged to force recreation next cycle."},
                         ensure_ascii=False,
                     ),
+                    search_vector=state_record.search_context,
                 )
             )
             await session.commit()
@@ -174,6 +199,7 @@ class TaskContext:
     id: str
     is_completed: bool
     hash: str
+    search_context: str
 
 
 def _is_task_historical(task: dict[str, Any], cutoff_date: datetime, task_id: str) -> bool:
@@ -232,6 +258,7 @@ async def _handle_issue_creation(sync_ctx: SyncContext, task_ctx: TaskContext, j
         jira_issue_id=issue["id"],
         last_sync_hash=task_ctx.hash,
         is_completed=task_ctx.is_completed,
+        search_context=task_ctx.search_context,
     )
     sync_ctx.session.add(new_state)
 
@@ -248,6 +275,7 @@ async def _handle_issue_creation(sync_ctx: SyncContext, task_ctx: TaskContext, j
                 indent=2,
                 ensure_ascii=False,
             ),
+            search_vector=task_ctx.search_context,
         )
     )
     sync_ctx.stats["created"] += 1
@@ -301,6 +329,7 @@ async def _handle_issue_update(
     state_record.last_sync_hash = task_ctx.hash
     state_record.last_updated_at = datetime.utcnow()
     state_record.is_completed = task_ctx.is_completed
+    state_record.search_context = task_ctx.search_context
     sync_ctx.session.add(state_record)
 
     sync_ctx.session.add(
@@ -315,6 +344,7 @@ async def _handle_issue_update(
                 },
                 ensure_ascii=False,
             ),
+            search_vector=task_ctx.search_context,
         )
     )
     sync_ctx.stats["updated"] += 1
@@ -324,7 +354,7 @@ async def _handle_issue_update(
 async def _handle_jira_400_bad_request(
     e: httpx.HTTPStatusError,
     ctx: SyncContext,
-    task_id: str,
+    task_ctx: TaskContext,
     jira_payload: dict[str, Any],
     task_logger: Any,
 ) -> bool:
@@ -357,7 +387,7 @@ async def _handle_jira_400_bad_request(
 
         ctx.session.add(
             SyncAuditLog(
-                pf_task_id=task_id,
+                pf_task_id=task_ctx.id,
                 operation=SyncOperation.ERROR,
                 details=json.dumps(
                     {
@@ -367,6 +397,7 @@ async def _handle_jira_400_bad_request(
                     },
                     ensure_ascii=False,
                 ),
+                search_vector=task_ctx.search_context,
             )
         )
         await ctx.session.commit()
@@ -407,8 +438,13 @@ async def _process_single_task(task: dict[str, Any], ctx: SyncContext) -> None:
         return
 
     # Extract Base Task Context
-
-    task_ctx = TaskContext(raw=task, id=task_id, is_completed=task.get("completed", False), hash=_compute_hash(task))
+    task_ctx = TaskContext(
+        raw=task,
+        id=task_id,
+        is_completed=task.get("completed", False),
+        hash=_compute_hash(task),
+        search_context=_extract_pf_search_context(task),  # Explicit extraction here
+    )
 
     lock_key = f"lock:pf_jira:task:{task_id}"
 
@@ -447,7 +483,7 @@ async def _process_single_task(task: dict[str, Any], ctx: SyncContext) -> None:
                 except httpx.HTTPStatusError as e:
                     # Reactive Cache Invalidation & DLQ Routing (The 400 Trap)
                     if e.response.status_code == status.HTTP_400_BAD_REQUEST:
-                        is_dlq = await _handle_jira_400_bad_request(e, ctx, task_id, jira_payload, task_logger)
+                        is_dlq = await _handle_jira_400_bad_request(e, ctx, task_ctx, jira_payload, task_logger)
                         if is_dlq:
                             return
                     raise
@@ -535,6 +571,7 @@ async def sync_pf_to_jira_task(ctx: dict[Any, Any], payload: dict[str, Any] | No
                         },
                         ensure_ascii=False,
                     ),
+                    search_vector=f"System Crash | {type(err).__name__} | Job ID: {job_id}",
                 )
             )
             await error_session.commit()
@@ -613,6 +650,7 @@ async def sync_jira_to_pf_task(ctx: dict[Any, Any], issue_key: str) -> None:
                                         },
                                         ensure_ascii=False,
                                     ),
+                                    search_vector=state_record.search_context,
                                 )
                             )
                             await session.commit()
@@ -634,6 +672,7 @@ async def sync_jira_to_pf_task(ctx: dict[Any, Any], issue_key: str) -> None:
                             details=json.dumps(
                                 {"action": "task_completed", "trigger": "jira_webhook"}, ensure_ascii=False
                             ),
+                            search_vector=state_record.search_context,
                         )
                     )
 

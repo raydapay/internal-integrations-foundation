@@ -50,6 +50,9 @@ class SyncState(SQLModel, table=True):
     last_sync_hash: str  # MD5/SHA of the PF entity state to detect changes
     is_completed: bool = Field(default=False)
     last_updated_at: datetime = Field(default_factory=datetime.utcnow)
+    search_context: str | None = Field(
+        default=None, description="Persisted high-cardinality data to bridge amnesia in lean webhook events."
+    )
 
 
 class RoutingAction(StrEnum):
@@ -103,6 +106,9 @@ class SyncAuditLog(SQLModel, table=True):
 
     operation: SyncOperation = Field(index=True)
     details: str = Field(description="JSON formatted string of the applied deltas or errors")
+    search_vector: str | None = Field(
+        default=None, index=True, description="Inherited flat context string for rapid ILIKE queries in the UI."
+    )
 
 
 class DomainConfig(SQLModel, table=True):

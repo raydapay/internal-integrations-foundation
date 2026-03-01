@@ -895,6 +895,7 @@ async def audit_dashboard(
                 SyncAuditLog.jira_issue_key.like(search_term),
                 SyncAuditLog.pf_task_id.like(search_term),
                 SyncAuditLog.details.like(search_term),
+                SyncAuditLog.search_vector.ilike(search_term),
             )
         )
 
