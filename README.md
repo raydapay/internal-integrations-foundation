@@ -13,6 +13,14 @@ The system is strictly divided into two execution tiers to prevent I/O blocking 
 
 *For a detailed breakdown of the synchronization polling, webhook cryptography, and Jira configuration, see [`docs/03-STATE_SYNC_MECHANICS.md`](docs/03-STATE_SYNC_MECHANICS.md).*
 
+## ⚙️ How It Works (Architecture)
+
+The Gateway operates on a **Decoupled Polling Architecture** for PeopleForce ingestion, deliberately rejecting PeopleForce's native workflow webhooks.
+
+* **The PeopleForce Limitation:** PeopleForce webhooks are restricted to specific HR "Workflows." Tasks created manually or outside of a strict workflow would be completely invisible to a webhook-driven system. Furthermore, forcing HR users to configure URL endpoints and API secrets inside their workflows is a severe UX anti-pattern.
+* **The Polling Solution:** The Gateway utilizes an ARQ worker to poll the global PeopleForce Tasks API. It computes stable SHA-256 hashes of the payloads, comparing them against a local SQLite ledger to detect strict state deltas, ensuring 100% capture of all tasks (workflow-bound or ad-hoc).
+* **Latency Acceptance:** The system is built for eventual consistency. The business does not require real-time Jira ticket generation, allowing the Gateway to poll efficiently in the background without aggressive rate-limiting penalties.
+
 ## 🛠️ Technical Stack
 
 Every technology choice was optimized for minimal Total Cost of Ownership (TCO) and high observability (see [`docs/02-TOOLING_DECISIONS.md`](docs/02-TOOLING_DECISIONS.md)).

@@ -73,3 +73,9 @@ The following alternative architectures were evaluated and explicitly rejected t
 ### 4.4 Rejected: Background SQLite Audit Loop
 * **Proposed:** A secondary ARQ cron worker that iterates over the `SyncState` database every 24 hours to check if Jira issues were closed without triggering the webhook.
 * **Why it was rejected:** Querying Jira iteratively for every open local state creates massive network I/O overhead and increases SQLite WAL locking contention. The JQL Reverse-Vector Sweep (Section 3.1) achieves the same consistency guarantee with a fraction of the network calls.
+
+
+### 4.5 Rejected: PeopleForce Workflow-Bound Webhooks
+* **Proposed:** Utilizing native PeopleForce webhooks configured via HR Workflows to trigger Jira issue creation, rather than delta-polling.
+* **Why it was rejected:** PeopleForce lacks global, account-level webhooks for Tasks. Requiring HR administrators to inject HTTP POST definitions and cryptographic secrets into business workflows is an unacceptable UX anti-pattern. Furthermore, relying on workflows introduces a massive operational blind spot: any task created manually or ad-hoc (unassociated with a workflow) would silently bypass the Gateway. Because the business explicitly accepts eventual consistency (e.g., a two-hour synchronization delay), the continuous background delta-polling engine provides 100% state capture without bleeding infrastructure configuration into the HRIS UI.
+"""
