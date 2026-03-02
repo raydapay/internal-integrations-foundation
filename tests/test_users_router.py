@@ -25,7 +25,7 @@ class TestUsersRouter(unittest.IsolatedAsyncioTestCase):
 
         # Standard synthetic Google UserInfo payload matching your router's extraction
         self.mock_google_user = {
-            "email": "admin@todapay.com",
+            "email": "admin@example.com",
             "name": "System Admin",
             "picture": "https://lh3.googleusercontent.com/a/fake",
         }
@@ -53,7 +53,7 @@ class TestUsersRouter(unittest.IsolatedAsyncioTestCase):
         self, mock_get_oauth: MagicMock, mock_settings: MagicMock
     ) -> None:
         """Verifies a first-time SSO login creates an active Admin if matching settings."""
-        mock_settings.INITIAL_ADMIN_EMAIL = "admin@todapay.com"
+        mock_settings.INITIAL_ADMIN_EMAIL = "admin@example.com"
 
         mock_oauth = MagicMock()
         mock_oauth.google.authorize_access_token = AsyncMock(return_value={"userinfo": self.mock_google_user})
@@ -70,12 +70,12 @@ class TestUsersRouter(unittest.IsolatedAsyncioTestCase):
         self.mock_session.add.assert_called_once()
         added_user = self.mock_session.add.call_args[0][0]
         self.assertIsInstance(added_user, User)
-        self.assertEqual(added_user.email, "admin@todapay.com")
+        self.assertEqual(added_user.email, "admin@example.com")
         self.assertEqual(added_user.role, UserRole.SYSTEM_ADMIN)
         self.assertTrue(added_user.is_active)
 
         # Verify Session Injection
-        self.assertEqual(self.mock_request.session["user"]["email"], "admin@todapay.com")
+        self.assertEqual(self.mock_request.session["user"]["email"], "admin@example.com")
         self.assertEqual(self.mock_request.session["user"]["role"], UserRole.SYSTEM_ADMIN.value)
 
         # Verify Redirect to Dashboard
@@ -88,7 +88,7 @@ class TestUsersRouter(unittest.IsolatedAsyncioTestCase):
         self, mock_get_oauth: MagicMock, mock_settings: MagicMock
     ) -> None:
         """Verifies that non-whitelisted new users are created but rejected with a 403."""
-        mock_settings.INITIAL_ADMIN_EMAIL = "someone_else@todapay.com"
+        mock_settings.INITIAL_ADMIN_EMAIL = "someone_else@example.com"
 
         mock_oauth = MagicMock()
         mock_oauth.google.authorize_access_token = AsyncMock(return_value={"userinfo": self.mock_google_user})
@@ -115,7 +115,7 @@ class TestUsersRouter(unittest.IsolatedAsyncioTestCase):
         # Simulate DB returning an existing User with an outdated name/avatar
         existing_user = User(
             id=1,
-            email="admin@todapay.com",
+            email="admin@example.com",
             full_name="Unknown",
             avatar_url="old_pic",
             role=UserRole.SYSTEM_ADMIN,
@@ -149,7 +149,7 @@ class TestUsersRouter(unittest.IsolatedAsyncioTestCase):
 
     async def test_logout_purges_session(self) -> None:
         """Verifies the /logout endpoint strictly annihilates the session dictionary."""
-        self.mock_request.session = {"user": {"email": "admin@todapay.com"}}
+        self.mock_request.session = {"user": {"email": "admin@example.com"}}
 
         response = await logout(self.mock_request)
 

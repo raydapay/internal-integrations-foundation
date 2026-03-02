@@ -27,7 +27,7 @@ class TestMappingEngine(BaseTest):
             rule2 = RoutingRule(
                 priority=50,
                 action=RoutingAction.DROP,
-                condition_assignee_pattern="@it.todapay.com",
+                condition_assignee_pattern="@it.example.com",
             )
             session.add_all([rule1, rule2])
             await session.commit()
@@ -39,16 +39,16 @@ class TestMappingEngine(BaseTest):
             }
 
             # Scenario A: Matches Rule 1 (Urgent task)
-            task_a = {"title": "Urgent server restart", "assigned_to": {"email": "bob@it.todapay.com"}}
+            task_a = {"title": "Urgent server restart", "assigned_to": {"email": "bob@it.example.com"}}
             action_a, _ = await evaluate_routing_rules(session, task_a, mock_resolver)
             self.assertEqual(action_a, RoutingAction.SYNC)
 
             # Scenario B: Matches Rule 2 (IT domain)
-            task_b = {"title": "Fix printer", "assigned_to": {"email": "bob@it.todapay.com"}}
+            task_b = {"title": "Fix printer", "assigned_to": {"email": "bob@it.example.com"}}
             action_b, _ = await evaluate_routing_rules(session, task_b, mock_resolver)
             self.assertEqual(action_b, RoutingAction.DROP)
 
             # Scenario C: Matches nothing (Fallback to defaults)
-            task_c = {"title": "Welcome aboard", "assigned_to": {"email": "new.hire@todapay.com"}}
+            task_c = {"title": "Welcome aboard", "assigned_to": {"email": "new.hire@example.com"}}
             action_c, _ = await evaluate_routing_rules(session, task_c, mock_resolver)
             self.assertEqual(action_c, RoutingAction.DROP)

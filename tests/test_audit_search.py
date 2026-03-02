@@ -67,14 +67,14 @@ class TestAuditSearchAndContext(BaseTest):
                 jira_issue_key="HR-10",
                 operation=SyncOperation.CREATE,
                 details="{}",
-                search_vector="1234 | Onboard new employee | ray@todapay.com",
+                search_vector="1234 | Onboard new employee | ray@example.com",
             )
             log_noise = SyncAuditLog(
                 pf_task_id="101",
                 jira_issue_key="HR-11",
                 operation=SyncOperation.UPDATE,
                 details="{}",
-                search_vector="5678 | Unrelated Task | someone_else@todapay.com",
+                search_vector="5678 | Unrelated Task | someone_else@example.com",
             )
             session.add_all([log_target, log_noise])
             await session.commit()
@@ -82,8 +82,8 @@ class TestAuditSearchAndContext(BaseTest):
         # 2. Setup mock request and params
         mock_request = MagicMock()
         mock_request.headers = {}
-        params = MockAuditParams(page=1, query="ray@todapay.com")
-        mock_user = {"email": "admin@todapay.com"}
+        params = MockAuditParams(page=1, query="ray@example.com")
+        mock_user = {"email": "admin@example.com"}
 
         # 3. Intercept the template renderer to inspect the context safely
         with patch("src.app.admin.templates.TemplateResponse") as mock_template:
@@ -99,7 +99,7 @@ class TestAuditSearchAndContext(BaseTest):
 
             self.assertEqual(len(logs), 1)
             self.assertEqual(logs[0].jira_issue_key, "HR-10")
-            self.assertEqual(logs[0].search_vector, "1234 | Onboard new employee | ray@todapay.com")
+            self.assertEqual(logs[0].search_vector, "1234 | Onboard new employee | ray@example.com")
 
 
 if __name__ == "__main__":

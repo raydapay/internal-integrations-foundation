@@ -17,7 +17,7 @@ class TestAuditAPI(BaseTest):
         """Sets up standard mock request dependencies."""
         self.mock_request = AsyncMock(spec=Request)
         self.mock_request.headers = {}
-        self.mock_user = {"id": 1, "email": "admin@todapay.com", "role": "system_admin"}
+        self.mock_user = {"id": 1, "email": "admin@example.com", "role": "system_admin"}
 
     async def _seed_audit_logs(self, count: int, search_term: str = "HR-10") -> None:
         """Helper to seed the in-memory database with test audit logs."""

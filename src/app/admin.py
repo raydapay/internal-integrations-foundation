@@ -916,6 +916,7 @@ async def audit_dashboard(
         "has_next": has_next,
         "query": params.query or "",
         "pf_url": settings.PF_URL,
+        "jira_url": settings.JIRA_BASE_URL,
     }
 
     if request.headers.get("HX-Request"):

@@ -13,7 +13,7 @@
     </td>
     <td class="is-vcentered">
         {% if log.jira_issue_key %}
-        <a href="https://todapay.atlassian.net/browse/{{ log.jira_issue_key }}" target="_blank" class="has-text-weight-bold">
+        <a href="{{ jira_url }}/browse/{{ log.jira_issue_key }}" target="_blank" class="has-text-weight-bold">
             {{ log.jira_issue_key }}
         </a>
         {% else %}

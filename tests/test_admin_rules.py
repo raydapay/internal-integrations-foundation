@@ -19,7 +19,7 @@ class TestAdminRoutingRules(BaseTest):
         super().setUp()
         self.mock_request = AsyncMock(spec=Request)
         self.mock_request.headers = {"HX-Request": "true"}
-        self.mock_user = {"id": 1, "email": "admin@todapay.com", "role": "system_admin"}
+        self.mock_user = {"id": 1, "email": "admin@example.com", "role": "system_admin"}
 
     @patch("src.app.admin.JiraClient", autospec=True)
     @patch("src.app.admin.templates", spec=Jinja2Templates)

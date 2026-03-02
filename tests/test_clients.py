@@ -24,7 +24,7 @@ class TestHTTPClientManager(unittest.IsolatedAsyncioTestCase):
     def test_get_client_isolates_different_domains(self) -> None:
         """Verifies that different domains receive distinct connection pools."""
         pf_client = HTTPClientManager.get_client("https://app.peopleforce.io", headers={}, auth=None)
-        jira_client = HTTPClientManager.get_client("https://todapay.atlassian.net", headers={}, auth=None)
+        jira_client = HTTPClientManager.get_client("https://example.atlassian.net", headers={}, auth=None)
 
         self.assertIsNot(
             pf_client, jira_client, "Manager incorrectly shared a connection pool across different domains."
@@ -33,7 +33,7 @@ class TestHTTPClientManager(unittest.IsolatedAsyncioTestCase):
     async def test_teardown_closes_all_transports(self) -> None:
         """Verifies that teardown cascades the aclose() command to all active transports."""
         pf_client = HTTPClientManager.get_client("https://app.peopleforce.io", headers={}, auth=None)
-        jira_client = HTTPClientManager.get_client("https://todapay.atlassian.net", headers={}, auth=None)
+        jira_client = HTTPClientManager.get_client("https://example.atlassian.net", headers={}, auth=None)
 
         # Intercept the underlying close methods
         pf_client.aclose = AsyncMock()
