@@ -25,6 +25,7 @@ class TestAuditSearchAndContext(BaseTest):
         payload: dict[str, Any] = {
             "id": 3199153,
             "title": "1:1 Review",
+            "description": "Discuss <b>achievements</b> and salary.",
             "description_plain": "Discuss achievements and salary.",
             "associated_to": {
                 "id": 101699,

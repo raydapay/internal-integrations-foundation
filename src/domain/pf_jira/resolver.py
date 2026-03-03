@@ -5,6 +5,7 @@ Jira Payload Resolution and Schema Validation Pipeline.
 import json
 import logging
 import re
+from html.parser import HTMLParser
 from typing import Any
 
 from redis.asyncio import Redis
@@ -13,6 +14,161 @@ from src.core.clients import JiraClient
 from src.domain.pf_jira.models import MappingSourceType, RoutingRule, RuleFieldMapping
 
 logger = logging.getLogger(__name__)
+
+
+class PeopleForceADFParser(HTMLParser):
+    """
+    Translates PeopleForce rich-text HTML into strict Atlassian Document Format (ADF).
+
+    Attributes:
+        root_node (dict): The root ADF document structure.
+        block_stack (list): Tracks nested block elements (e.g., lists).
+        current_paragraph (dict | None): The active paragraph block for inline nodes.
+        current_marks (set): Active formatting marks (strong, em, etc.).
+        skip_data (int): Counter to suppress inner text rendering (e.g., inside auth links).
+    """
+
+    def __init__(self) -> None:
+        # convert_charrefs=True ensures &nbsp; is converted to \xa0 before hitting handle_data
+        super().__init__(convert_charrefs=True)
+        self.root_node: dict[str, Any] = {"type": "doc", "version": 1, "content": []}
+        self.block_stack: list[dict[str, Any]] = [self.root_node]
+        self.current_paragraph: dict[str, Any] | None = None
+        self.current_marks: set[str] = set()
+        self.skip_data: int = 0
+
+    def _ensure_paragraph(self) -> None:
+        """Ensures an active paragraph block exists, respecting ADF nesting rules."""
+        if self.current_paragraph is None:
+            self.current_paragraph = {"type": "paragraph", "content": []}
+            parent = self.block_stack[-1]
+
+            if parent["type"] == "bulletList":
+                new_li = {"type": "listItem", "content": [self.current_paragraph]}
+                parent["content"].append(new_li)
+                self.block_stack.append(new_li)
+            else:
+                parent["content"].append(self.current_paragraph)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attrs_dict = dict(attrs)
+
+        if tag in ("b", "strong"):
+            self.current_marks.add("strong")
+        elif tag in ("i", "em"):
+            self.current_marks.add("em")
+        elif tag in ("u",):
+            self.current_marks.add("underline")
+        elif tag == "br":
+            self._ensure_paragraph()
+            self.current_paragraph["content"].append({"type": "hardBreak"})
+        elif tag in ("p", "div"):
+            self.current_paragraph = None
+        elif tag == "ul":
+            self.current_paragraph = None
+            new_list = {"type": "bulletList", "content": []}
+            self.block_stack[-1]["content"].append(new_list)
+            self.block_stack.append(new_list)
+        elif tag == "li":
+            self.current_paragraph = None
+            new_li = {"type": "listItem", "content": []}
+            parent = self.block_stack[-1]
+            if parent["type"] == "bulletList":
+                parent["content"].append(new_li)
+                self.block_stack.append(new_li)
+        elif tag == "a":
+            name = attrs_dict.get("name")
+            if name:
+                self._add_text(f" [Attachment: {name}]")
+                self.skip_data += 1
+        elif tag == "img":
+            name = attrs_dict.get("name", "attached_image.png")
+            self._add_text(f" [Image: {name}]")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in ("b", "strong"):
+            self.current_marks.discard("strong")
+        elif tag in ("i", "em"):
+            self.current_marks.discard("em")
+        elif tag in ("u",):
+            self.current_marks.discard("underline")
+        elif tag in ("p", "div", "ul", "li"):
+            self.current_paragraph = None
+            # Only pop if we are closing the matching block type
+            if tag == "ul" and self.block_stack[-1]["type"] == "bulletList":
+                self.block_stack.pop()
+            elif tag == "li" and self.block_stack[-1]["type"] == "listItem":
+                self.block_stack.pop()
+        elif tag == "a":
+            if self.skip_data > 0:
+                self.skip_data -= 1
+
+    def handle_data(self, data: str) -> None:
+        """Processes text nodes and sanitizes resolved HTML entities."""
+        if self.skip_data > 0:
+            return
+
+        is_pure_whitespace = not data.strip()
+        has_nbsp = "\xa0" in data
+
+        if is_pure_whitespace and not has_nbsp and self.current_paragraph is None:
+            return
+
+        self._add_text(data)
+
+    def _add_text(self, text: str) -> None:
+        if not text:
+            return
+        self._ensure_paragraph()
+
+        node: dict[str, Any] = {"type": "text", "text": text}
+        if self.current_marks:
+            node["marks"] = [{"type": m} for m in self.current_marks]
+
+        self.current_paragraph["content"].append(node)
+
+    def to_adf(self) -> dict[str, Any]:
+        """Prunes structurally empty nodes and returns the final ADF dictionary."""
+        cleaned_content = self._clean_nodes(self.root_node["content"])
+        if not cleaned_content:
+            cleaned_content = [{"type": "paragraph", "content": [{"type": "text", "text": " "}]}]
+
+        self.root_node["content"] = cleaned_content
+        return self.root_node
+
+    def _clean_nodes(self, nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        cleaned = []
+        for node in nodes:
+            if node["type"] == "paragraph" and not node.get("content"):
+                continue
+            elif node["type"] in ("bulletList", "listItem"):
+                node["content"] = self._clean_nodes(node.get("content", []))
+                if not node["content"]:
+                    continue
+            cleaned.append(node)
+        return cleaned
+
+
+def format_html_to_adf(html_payload: str) -> dict[str, Any]:
+    """
+    Helper function to process an HTML string into ADF.
+
+    Args:
+        html_payload (str): The raw HTML string.
+
+    Returns:
+        dict[str, Any]: A compliant Atlassian Document Format dictionary.
+    """
+    if not html_payload:
+        return {
+            "type": "doc",
+            "version": 1,
+            "content": [{"type": "paragraph", "content": [{"type": "text", "text": " "}]}],
+        }
+
+    parser = PeopleForceADFParser()
+    parser.feed(html_payload)
+    return parser.to_adf()
 
 
 class SchemaValidationError(Exception):
@@ -238,35 +394,18 @@ class FieldDataResolver:
             )
 
     def _format_doc(self, value: Any) -> dict[str, Any]:
-        """Formats text into an Atlassian Document Format (ADF) object with basic bold support."""
-        MIN_BOLD_MARKER_LEN = 2
+        """Formats HTML or mixed text into strict Atlassian Document Format (ADF)."""
+
         safe_text = str(value) if value is not None else ""
-        paragraphs = []
 
-        for line in safe_text.split("\n"):
-            clean_line = line.strip()
-            content = []
+        # 1. Markdown Backward Compatibility: Convert *Text* to <b>Text</b>
+        # This ensures Jinja injections like *PeopleForce Metadata* are styled correctly.
+        safe_text = re.sub(r"(?<!\\)\*(.+?)(?<!\\)\*", r"<b>\1</b>", safe_text)
 
-            if clean_line:
-                # Basic Bold Detection: checks if line starts and ends with *
-                is_bold = (
-                    clean_line.startswith("*") and clean_line.endswith("*") and len(clean_line) > MIN_BOLD_MARKER_LEN
-                )
+        # 2. Normalize raw newlines to <br> so the HTML parser translates them to 'hardBreak'
+        safe_text = safe_text.replace("\n", "<br>")
 
-                text_node = {"type": "text", "text": clean_line.strip("*") if is_bold else clean_line}
-
-                if is_bold:
-                    text_node["marks"] = [{"type": "strong"}]
-
-                content.append(text_node)
-            else:
-                # ADF schema invalidates empty paragraph content arrays.
-                # Inject a blank space to preserve the visual line break.
-                content.append({"type": "text", "text": " "})
-
-            paragraphs.append({"type": "paragraph", "content": content})
-
-        return {"version": 1, "type": "doc", "content": paragraphs}
+        return format_html_to_adf(safe_text)
 
     def _format_date(self, value: Any) -> str | None:
         """Formats dates, strictly casting missing values to explicit JSON nulls."""

@@ -20,7 +20,7 @@
 Subject: {{ title }} - {{ associated_to.full_name }}
 Deadline: {{ ends_on }}
 
-{{ description_plain }}{% endraw %}{% endset %}
+{{ description }}{% endraw %}{% endset %}
                 {% elif field_id == 'assignee' %}
                     {% set current_val = '{{ assigned_to.email }}' %}
                 {% elif field_id == 'reporter' %}

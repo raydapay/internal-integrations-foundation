@@ -1,7 +1,7 @@
 Name                             Stmts   Miss  Cover   Missing
 --------------------------------------------------------------
 src\app\__init__.py                  0      0   100%
-src\app\admin.py                   514    377    27%   46-55, 60-68, 74-82, 88-98, 105, 120, 132-201, 223-246, 254-255, 266-280, 290-332, 341-354, 364-380, 407-456, 503, 512-514, 541-542, 554-570, 581-645, 656-714, 736-740, 750-751, 777-796, 820-842, 852-865, 903, 941-960, 969-978, 986-995, 1014-1029, 1034-1062, 1067-1084, 1093-1105, 1122-1138, 1144-1153
+src\app\admin.py                   514    377    27%   46-55, 60-68, 74-82, 88-98, 105, 120, 132-201, 223-246, 254-255, 266-280, 290-332, 341-354, 364-380, 407-456, 503, 512-514, 541-542, 554-570, 581-645, 656-714, 736-740, 750-751, 777-796, 820-842, 852-865, 903, 942-961, 970-979, 987-996, 1015-1030, 1035-1063, 1068-1085, 1094-1106, 1123-1139, 1145-1154
 src\app\main.py                    106     48    55%   34-49, 97-100, 115-116, 136-137, 147, 158-164, 170-205
 src\app\schemas.py                  49      0   100%
 src\app\webhooks.py                 30      3    90%   19-21
@@ -17,7 +17,7 @@ src\core\security.py                60      6    90%   38, 58-60, 111, 117
 src\core\utils.py                   41     18    56%   18-42, 80-83
 src\domain\pf_jira\mapping.py       44      6    86%   58-65
 src\domain\pf_jira\models.py        68      0   100%
-src\domain\pf_jira\resolver.py     156     30    81%   55, 75, 110, 128-131, 165, 185-222, 306, 318, 340
+src\domain\pf_jira\resolver.py     251     41    84%   45-47, 59, 92, 113, 119, 132, 141, 145, 160, 203, 223, 258, 276-279, 313, 333-370, 437, 449, 471
 src\domain\pf_jira\router.py        15      1    93%   48
 src\domain\pf_jira\tasks.py        491    168    66%   87-88, 91-92, 98-102, 177, 216-227, 236, 285-291, 309, 326-327, 379-380, 386-405, 437-438, 473-475, 487-489, 495-498, 501, 518, 531, 614-615, 618-619, 628, 633-659, 682-684, 690, 720-721, 740-746, 785-787, 799-800, 844-846, 869-880, 893-903, 912-928, 933-966, 985-990, 993-1012, 1047-1063, 1067-1070
 src\domain\users\__init__.py         0      0   100%
@@ -28,7 +28,7 @@ tests\__init__.py                    6      0   100%
 tests\base.py                       45      0   100%
 tests\test_admin_rules.py           39      1    97%   76
 tests\test_audit_api.py             46      1    98%   79
-tests\test_audit_search.py          47      1    98%   106
+tests\test_audit_search.py          47      1    98%   107
 tests\test_auth.py                  22      1    95%   50
 tests\test_cache_manager.py         25      1    96%   39
 tests\test_clients.py               39      1    97%   76
@@ -38,11 +38,12 @@ tests\test_jira_validation.py       48      0   100%
 tests\test_logger.py                66      2    97%   15, 125
 tests\test_mapping.py               22      0   100%
 tests\test_notifications.py         74      1    99%   116
-tests\test_pf_jira_resolver.py     110      1    99%   243
+tests\test_pf_adf_parser.py         42      1    98%   88
+tests\test_pf_jira_resolver.py     122      1    99%   268
 tests\test_pf_jira_router.py        31      1    97%   58
 tests\test_pf_jira_tasks.py        178      4    98%   104-106, 353
 tests\test_sso_health.py            70      1    99%   106
 tests\test_users_router.py          92      1    99%   162
 tests\test_webhooks.py              91      1    99%   148
 --------------------------------------------------------------
-TOTAL                             3224    843    74%
+TOTAL                             3373    855    75%

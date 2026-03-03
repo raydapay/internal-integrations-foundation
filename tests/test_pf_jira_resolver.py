@@ -165,18 +165,17 @@ class TestFieldDataResolver(unittest.IsolatedAsyncioTestCase):
                 )
 
     def test_format_doc(self) -> None:
-        """Verifies Atlassian Document Format (ADF) generation."""
-        # Standard multiline string
-        res = self.resolver._format_doc("Line 1\nLine 2")
-        self.assertEqual(res["type"], "doc")
-        self.assertEqual(len(res["content"]), 2)
-        self.assertEqual(res["content"][0]["content"][0]["text"], "Line 1")
-        self.assertEqual(res["content"][1]["content"][0]["text"], "Line 2")
+        """Verifies Atlassian Document Format (ADF) generation with hard breaks."""
+        text = "Line 1\nLine 2"
+        res = self.resolver._format_doc(text)
 
-        # None/Null coercion now yields a schema-compliant space-padded paragraph
-        res_none = self.resolver._format_doc(None)
-        self.assertEqual(len(res_none["content"]), 1)
-        self.assertEqual(res_none["content"][0]["content"], [{"type": "text", "text": " "}])
+        # Under the HTML parser, this should be 1 paragraph containing text -> hardBreak -> text
+        self.assertEqual(len(res["content"]), 1)
+        paragraph_content = res["content"][0]["content"]
+
+        self.assertEqual(paragraph_content[0]["text"], "Line 1")
+        self.assertEqual(paragraph_content[1]["type"], "hardBreak")
+        self.assertEqual(paragraph_content[2]["text"], "Line 2")
 
     def test_format_date(self) -> None:
         """Verifies date field strict null-coercion."""
@@ -217,26 +216,52 @@ class TestFieldDataResolver(unittest.IsolatedAsyncioTestCase):
 
     def test_format_doc_bold_support(self) -> None:
         """Verifies that lines wrapped in asterisks are converted to strong ADF marks."""
-        res = self.resolver._format_doc("*Bold Header*\nRegular line")
+        text = "*Bold Header*"
+        res = self.resolver._format_doc(text)
 
-        # Check Bold Node
-        bold_node = res["content"][0]["content"][0]
+        paragraph_content = res["content"][0]["content"]
+        bold_node = paragraph_content[0]
+
         self.assertEqual(bold_node["text"], "Bold Header")
         self.assertEqual(bold_node["marks"][0]["type"], "strong")
 
-        # Check Regular Node
-        reg_node = res["content"][1]["content"][0]
-        self.assertEqual(reg_node["text"], "Regular line")
-        self.assertNotIn("marks", reg_node)
-
     def test_format_doc_empty_lines(self) -> None:
-        """Ensure empty lines are padded with a space to satisfy ADF paragraph rules."""
-        res = self.resolver._format_doc("Line 1\n\nLine 3")
+        """
+        Ensures empty lines (consecutive newlines) are translated to
+        consecutive hardBreak nodes without violating ADF constraints.
+        """
+        text = "Line 1\n\nLine 2"
+        res = self.resolver._format_doc(text)
 
-        # Isolate the empty line paragraph (index 1)
-        empty_paragraph = res["content"][1]
+        paragraph_content = res["content"][0]["content"]
 
-        self.assertEqual(empty_paragraph["content"][0]["text"], " ")
+        self.assertEqual(paragraph_content[0]["text"], "Line 1")
+        self.assertEqual(paragraph_content[1]["type"], "hardBreak")
+        self.assertEqual(paragraph_content[2]["type"], "hardBreak")
+        self.assertEqual(paragraph_content[3]["text"], "Line 2")
+
+    def test_nbsp_preservation_and_indentation(self) -> None:
+        """
+        Verifies that &nbsp; entities are translated to native \\xa0 characters
+        and are not pruned by whitespace filters, preserving Jira indentation.
+        """
+        # Simulates PeopleForce sending an indented bullet point
+        html = "<br>&nbsp;• HR budget<br><p>&nbsp;</p>"
+        res = self.resolver._format_doc(html)
+
+        content = res["content"]
+
+        # Verify the first paragraph captures the \xa0 indentation
+        paragraph_1 = content[0]["content"]
+        self.assertEqual(paragraph_1[0]["type"], "hardBreak")
+
+        # The exact \xa0 character must be present to force Jira UI indentation
+        self.assertEqual(paragraph_1[1]["text"], "\xa0• HR budget")
+        self.assertEqual(paragraph_1[2]["type"], "hardBreak")
+
+        # Verify the isolated &nbsp; inside the <p> tag was not pruned as empty space
+        paragraph_2 = content[1]["content"]
+        self.assertEqual(paragraph_2[0]["text"], "\xa0")
 
 
 if __name__ == "__main__":
